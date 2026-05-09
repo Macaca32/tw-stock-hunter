@@ -1,0 +1,39 @@
+{
+  "version": "1.5",
+  "last_run": "2026-05-09T11:17:58.562462",
+  "last_date": "2026-05-09",
+  "pipeline": {
+    "stage1": {
+      "passed": 399,
+      "watchlist": 334,
+      "rejected": 624
+    },
+    "stage2": {
+      "passed": 380,
+      "disqualified": 0
+    },
+    "regime": "bull",
+    "price_history": "50 stocks from yfinance (20 days)",
+    "paper_trades": 5,
+    "backtest": {
+      "win_rate": 70.8,
+      "sharpe": 9.33
+    }
+  },
+  "modules": [
+    "fetch_data.py - TWSE Open API batch fetcher",
+    "fetch_history.py - Historical price data (yfinance fallback)",
+    "fetch_institutional.py - Institutional ownership data",
+    "regime_detector.py - Market regime detection (yfinance)",
+    "stage1_screen.py - Quant pre-screen + composite scoring",
+    "stage2_deep.py - Fundamental deep-dive",
+    "paper_trader.py - Paper trading simulation",
+    "signal_logger.py - Signal tracking + reports",
+    "telegram_alerts.py - Telegram alerts",
+    "learning/backtest.py - Backtesting framework",
+    "learning/calibrator.py - Self-improvement weight calibration"
+  ],
+  "cron_job": "c2f1a4b0-80e1-45bb-9f37-9965607e59ff",
+  "cron_schedule": "15:30 TWT, Mon-Fri",
+  "status": "Phase 1 complete - all modules working"
+}

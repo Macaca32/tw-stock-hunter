@@ -1,0 +1,54 @@
+{
+  "version": "1.0",
+  "updated": "2026-05-09",
+  "regimes": {
+    "bull_momentum": {
+      "description": "Strong uptrend, high volume, foreign buying",
+      "conditions": {
+        "taiex_above_60ma": true,
+        "taiex_20ma_above_60ma": true,
+        "foreign_net_buying_5d": true,
+        "advance_decline_ratio": "> 1.2"
+      },
+      "adjustments": {
+        "position_size_mult": 1.0,
+        "entry_threshold": 70,
+        "stop_loss_pct": 0.03,
+        "take_profit_pct": 0.06
+      }
+    },
+    "choppy_neutral": {
+      "description": "Sideways market, low conviction",
+      "conditions": {
+        "taiex_20ma_flat": true,
+        "volume_below_avg": true,
+        "advance_decline_ratio": "0.8-1.2"
+      },
+      "adjustments": {
+        "position_size_mult": 0.6,
+        "entry_threshold": 75,
+        "stop_loss_pct": 0.025,
+        "take_profit_pct": 0.05
+      }
+    },
+    "bear_defensive": {
+      "description": "Downtrend, risk-off",
+      "conditions": {
+        "taiex_below_60ma": true,
+        "foreign_net_selling_5d": true,
+        "advance_decline_ratio": "< 0.8"
+      },
+      "adjustments": {
+        "position_size_mult": 0.4,
+        "entry_threshold": 80,
+        "stop_loss_pct": 0.02,
+        "take_profit_pct": 0.04
+      }
+    }
+  },
+  "detection": {
+    "lookback_days": 20,
+    "volume_window": 20,
+    "foreign_flow_window": 5
+  }
+}

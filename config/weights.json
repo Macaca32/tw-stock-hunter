@@ -1,0 +1,43 @@
+{
+  "version": "1.1",
+  "updated": "2026-05-09",
+  "stage1": {
+    "revenue_momentum": 0.1,
+    "profitability": 0.3,
+    "valuation": 0.25,
+    "institutional_flow": 0.1,
+    "technical_momentum": 0.25
+  },
+  "stage2": {
+    "revenue_growth": 0.2,
+    "margin_stability": 0.15,
+    "roe_level": 0.15,
+    "cash_flow_quality": 0.15,
+    "balance_sheet": 0.15,
+    "earnings_surprise": 0.1,
+    "management": 0.1
+  },
+  "regime_weights": {
+    "bull_momentum": {
+      "revenue_momentum": 0.25,
+      "profitability": 0.2,
+      "valuation": 0.1,
+      "institutional_flow": 0.25,
+      "technical_momentum": 0.2
+    },
+    "choppy_neutral": {
+      "revenue_momentum": 0.2,
+      "profitability": 0.2,
+      "valuation": 0.2,
+      "institutional_flow": 0.2,
+      "technical_momentum": 0.2
+    },
+    "bear_defensive": {
+      "revenue_momentum": 0.15,
+      "profitability": 0.25,
+      "valuation": 0.25,
+      "institutional_flow": 0.2,
+      "technical_momentum": 0.15
+    }
+  }
+}
