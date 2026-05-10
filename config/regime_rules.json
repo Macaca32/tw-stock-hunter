@@ -1,13 +1,13 @@
 {
-  "version": "2.0",
+  "version": "3.0",
   "updated": "2026-05-10",
-  "notes": "FIX v2: Extended lookback + global risk filter per z.ai review",
+  "notes": "FIX v3: 50/150/300-day SMAs, NO_TRADE regime, min 5-day duration, transition logic",
   "regimes": {
     "bull_momentum": {
       "description": "Strong uptrend, high volume, foreign buying",
       "conditions": {
-        "taiex_above_60ma": true,
-        "taiex_20ma_above_60ma": true,
+        "taiex_above_150ma": true,
+        "taiex_50ma_above_150ma": true,
         "foreign_net_buying_5d": true,
         "advance_decline_ratio": "> 1.2"
       },
@@ -21,7 +21,7 @@
     "choppy_neutral": {
       "description": "Sideways market, low conviction",
       "conditions": {
-        "taiex_20ma_flat": true,
+        "taiex_50ma_flat": true,
         "volume_below_avg": true,
         "advance_decline_ratio": "0.8-1.2"
       },
@@ -35,7 +35,7 @@
     "bear_defensive": {
       "description": "Downtrend, risk-off",
       "conditions": {
-        "taiex_below_60ma": true,
+        "taiex_below_150ma": true,
         "foreign_net_selling_5d": true,
         "advance_decline_ratio": "< 0.8"
       },
@@ -45,11 +45,27 @@
         "stop_loss_pct": 0.02,
         "take_profit_pct": 0.04
       }
+    },
+    "no_trade": {
+      "description": "Extreme risk conditions - no new positions",
+      "conditions": {
+        "global_risk": "extreme",
+        "breadth_below": 0.25,
+        "volatility_above": 0.035
+      },
+      "adjustments": {
+        "position_size_mult": 0.0,
+        "entry_threshold": 999,
+        "stop_loss_pct": 0.02,
+        "take_profit_pct": 0.02
+      }
     }
   },
   "detection": {
     "short_term_lookback": 50,
-    "long_term_lookback": 200,
+    "medium_term_lookback": 150,
+    "long_term_lookback": 300,
+    "min_regime_duration_days": 5,
     "volume_window": 20,
     "foreign_flow_window": 5,
     "ex_dividend_season": {

@@ -101,31 +101,68 @@ def check_hard_filters(stock, company_info, datasets, thresholds, price_history=
     if close == 0:
         return False, "no_closing_price"
     
-    # === LIQUIDITY FILTER (ADV) ===
-    # Minimum average daily volume to ensure we can enter/exit positions
-    adv_threshold = stage1_thresh.get("min_adv", 5000000)  # 5M shares/day default
+    # === LIQUIDITY FILTER (ADV in TWD) ===
+    # FIX v3: Use ADV in TWD value, NOT share count.
+    # A NT$500 stock trading 3M shares = NT$1.5B daily value.
+    # A NT$15 stock trading 6M shares = NT$90M daily value.
+    # Minimum NT$100M daily value (~US$3M) for institutional-grade screening.
+    adv_value_threshold = stage1_thresh.get("min_adv_twd", 100000000)  # NT$100M/day default
     if price_history and stock_code in price_history:
         history = price_history[stock_code]
         if len(history) >= 20:
-            avg_vol = sum(h.get("volume", 0) for h in history[-20:]) / min(20, len(history))
-            if avg_vol < adv_threshold:
-                return False, "insufficient_liquidity"
+            # Calculate average daily VALUE (price × volume), not just volume
+            daily_values = []
+            for h in history[-20:]:
+                price = h.get("close", 0)
+                vol = h.get("volume", 0)
+                if price > 0 and vol > 0:
+                    daily_values.append(price * vol)
+            if daily_values:
+                avg_daily_value = sum(daily_values) / len(daily_values)
+                if avg_daily_value < adv_value_threshold:
+                    return False, "insufficient_liquidity_twd"
+            else:
+                return False, "insufficient_liquidity_no_data"
         elif len(history) > 0:
             # Fallback: use last 5 days if we don't have 20
-            avg_vol = sum(h.get("volume", 0) for h in history[-5:]) / min(5, len(history))
-            if avg_vol < adv_threshold * 0.5:  # Lower threshold for short history
-                return False, "insufficient_liquidity"
+            daily_values = []
+            for h in history[-5:]:
+                price = h.get("close", 0)
+                vol = h.get("volume", 0)
+                if price > 0 and vol > 0:
+                    daily_values.append(price * vol)
+            if daily_values:
+                avg_daily_value = sum(daily_values) / len(daily_values)
+                if avg_daily_value < adv_value_threshold * 0.5:
+                    return False, "insufficient_liquidity_twd_short"
+            else:
+                return False, "insufficient_liquidity_no_data"
     
     # Market cap filter (use company info if available)
+    # FIX v3: TWSE vs TPEx differentiation - stricter for TPEx
     if company_info:
         paid_in_raw = get_field(company_info, "實收資本額", "paid_in_capital", "")
         paid_in = safe_float(paid_in_raw, 0)
         market_cap = close * paid_in  # 實收資本額 is already in dollars
+        
+        # Determine if TPEx or TWSE (TPEx codes >= 9900 or in 6xxx range)
+        is_tpex = False
+        try:
+            code_int = int(stock_code)
+            if code_int >= 9900 or (6000 <= code_int <= 6999):
+                is_tpex = True
+        except:
+            pass
+        
+        # FIX v3: Higher market cap floor for position sizing safety
+        # NT$50B for TWSE, NT$30B for TPEx (stricter due to higher risk)
+        min_cap = stage1_thresh.get("min_market_cap_tpex" if is_tpex else "min_market_cap", 50000000000)
     else:
         # Estimate market cap from price (rough heuristic)
         market_cap = close * 1000000000  # Assume 1B shares if no data
+        min_cap = stage1_thresh.get("min_market_cap", 50000000000)
     
-    if market_cap < stage1_thresh["min_market_cap"]:
+    if market_cap < min_cap:
         return False, "market_cap_too_small"
     
     # Price range
@@ -156,7 +193,8 @@ def check_hard_filters(stock, company_info, datasets, thresholds, price_history=
                     if pledge_ratio > 0.30:
                         return False, "high_pledge_risk"
     
-    # === RECENT PENALTY CHECK ===
+    # === PENALTY CHECK (BINARY - ANY TWSE/FSC penalty = DISQUALIFY) ===
+    # FIX v3: No sliding scale. There's no "minor financial fraud."
     penalty_data = datasets.get("penalties", [])
     for p in penalty_data:
         if get_field(p, "公司代號", "Code", "") == stock_code:
@@ -165,8 +203,8 @@ def check_hard_filters(stock, company_info, datasets, thresholds, price_history=
                 try:
                     penalty_date = datetime.strptime(str(date_str)[:8], "%Y%m%d")
                     days_ago = (datetime.now() - penalty_date).days
-                    # Disqualify if penalty within last 180 days
-                    if days_ago < 180:
+                    # FIX v3: 365-day lookback, ANY penalty = disqualify
+                    if days_ago < 365:
                         return False, "recent_penalty"
                 except:
                     pass

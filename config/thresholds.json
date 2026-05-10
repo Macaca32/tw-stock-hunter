@@ -1,12 +1,13 @@
 {
-  "version": "2.0",
+  "version": "3.0",
   "updated": "2026-05-10",
-  "notes": "FIX v2: Stricter filters per z.ai critical review",
+  "notes": "FIX v3: z.ai Round 2 fixes - ADV in TWD, ATR 2.5x, NO_TRADE regime, sector limits, corporate actions",
   "stage1": {
     "pass_threshold": 60,
     "watchlist_threshold": 45,
-    "min_market_cap": 20000000000,
-    "min_adv": 5000000,
+    "min_market_cap": 50000000000,
+    "min_market_cap_tpex": 30000000000,
+    "min_adv_twd": 100000000,
     "price_floor": 15,
     "price_ceiling": 3000,
     "min_listing_age_years": 2
@@ -15,19 +16,19 @@
     "fundamental_score_min": 65,
     "red_flag_disqualify": true,
     "max_pledge_ratio": 0.30,
-    "max_penalty_score": 50,
-    "min_announcement_score": 30
+    "penalty_disqualify": true,
+    "penalty_lookback_days": 365,
+    "max_announcement_score": 30
   },
-  "stage3": {
-    "technical_score_min": 55,
-    "rsi_overbought": 70,
-    "rsi_oversold": 30
+  "sector_limits": {
+    "max_positions_per_sector": 3,
+    "sector_reduction_pct": 0.50
   },
   "risk": {
     "risk_per_trade": 0.015,
     "max_portfolio_heat": 0.06,
-    "max_sector_pct": 0.40,
-    "max_drawdown": 0.15,
+    "max_sector_pct": 0.25,
+    "max_drawdown": 0.20,
     "min_rr_ratio": 2.0,
     "max_positions": 8
   },
@@ -35,6 +36,7 @@
     "daily_loss_limit": 0.04,
     "weekly_loss_limit": 0.08,
     "consecutive_losses": 4,
-    "max_drawdown_pct": 0.15
+    "max_drawdown_pct": 0.20,
+    "stage1_pass_rate_max": 0.50
   }
 }

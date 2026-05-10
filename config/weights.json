@@ -1,7 +1,7 @@
 {
-  "version": "2.0",
+  "version": "3.0",
   "updated": "2026-05-10",
-  "notes": "FIX v2: Resolved valuation vs momentum conflict per z.ai review",
+  "notes": "FIX v3: Conditional weights per regime, resolved valuation-momentum conflict",
   "stage1": {
     "revenue_momentum": 0.20,
     "profitability": 0.25,
@@ -34,11 +34,12 @@
       "technical_momentum": 0.20
     },
     "bear_defensive": {
-      "revenue_momentum": 0.15,
+      "revenue_momentum": 0.10,
       "profitability": 0.25,
-      "valuation": 0.25,
+      "valuation": 0.30,
       "institutional_flow": 0.20,
       "technical_momentum": 0.15
-    }
+    },
+    "no_trade": null
   }
 }

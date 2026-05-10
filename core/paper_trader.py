@@ -19,6 +19,14 @@ class PaperTrader:
         self.trades = []
         self.active_positions = []
         self.data_dir = Path(__file__).parent.parent / "data"
+        
+        # FIX v3: Initialize corporate action handler
+        self.corp_handler = None
+        try:
+            from corporate_actions import CorporateActionHandler
+            self.corp_handler = CorporateActionHandler(str(self.data_dir))
+        except ImportError:
+            pass  # Corporate action handling unavailable
     
     def _default_config(self):
         return {
@@ -26,14 +34,14 @@ class PaperTrader:
             "max_portfolio_heat": 0.06,  # 6% max total risk
             "take_profit_rr": 2.0,  # 2:1 reward:risk
             "stop_loss_pct": -0.03,  # -3% fallback (used only if ATR unavailable)
-            "atr_stop_mult": 1.5,  # 1.5x ATR for stop loss (FIX v2)
+            "atr_stop_mult": 2.5,  # 2.5x ATR for stop loss (FIX v3: Taiwan mid-caps need wider stops)
             "atr_period": 14,  # 14-day ATR period
             "max_holding_days": 20,
             "max_positions": 5,
             "entry_buffer": 0.01,  # 1% buffer for entry
             "commission_rate": 0.003,  # 0.3% commission
-            "gap_risk_buffer": 0.01,  # 1% extra buffer for gap risk (FIX v2)
-            "max_drawdown_pct": 0.15,  # 15% max drawdown (FIX v2: was 10%, too tight)
+            "gap_risk_buffer_atr_mult": 0.5,  # FIX v3: 0.5x ATR for gap buffer (was flat 1%)
+            "max_drawdown_pct": 0.20,  # 20% max drawdown (FIX v3: momentum strategy needs room)
         }
     
     def load_candidates(self, date_str=None):
@@ -117,11 +125,12 @@ class PaperTrader:
             atr = self.calc_atr(history, period=self.config.get("atr_period", 14))
             
             if atr is not None and atr > 0:
-                atr_mult = self.config.get("atr_stop_mult", 1.5)
-                gap_buffer = self.config.get("gap_risk_buffer", 0.01)
+                atr_mult = self.config.get("atr_stop_mult", 2.5)
+                gap_mult = self.config.get("gap_risk_buffer_atr_mult", 0.5)
                 
-                # Stop = entry - (ATR * multiplier) - gap buffer
-                stop = entry_price - (atr * atr_mult) - (entry_price * gap_buffer)
+                # FIX v3: Gap buffer = 0.5x ATR (not flat 1%)
+                # Stop = entry - (ATR * multiplier) - (ATR * gap_mult)
+                stop = entry_price - (atr * atr_mult) - (atr * gap_mult)
                 
                 # Ensure stop is at least 2% below entry (minimum protection)
                 min_stop = entry_price * 0.98
@@ -136,14 +145,19 @@ class PaperTrader:
     def simulate_entry(self, candidates, date_str=None):
         """Simulate entry for top candidates
         
-        FIX v2: Use ATR-based stops, add gap risk buffer,
-        add liquidity check (skip stocks with insufficient price history).
+        FIX v3: Use ATR-based stops, add gap risk buffer,
+        add liquidity check (skip stocks with insufficient price history),
+        enforce sector concentration limits (max 3 per sector).
         """
         if date_str is None:
             date_str = datetime.now().strftime("%Y-%m-%d")
         
         new_trades = []
         price_history = self.load_price_history()
+        
+        # FIX v3: Sector concentration tracking
+        sector_counts = {}  # sector -> count of positions
+        max_per_sector = self.config.get("max_positions_per_sector", 3)
         
         # Only take top candidates up to max_positions
         for candidate in candidates[:self.config["max_positions"]]:
@@ -158,6 +172,14 @@ class PaperTrader:
             if entry_price == 0:
                 continue
             
+            # FIX v3: Check sector concentration
+            sector = self._get_sector(code)
+            current_sector_count = sector_counts.get(sector, 0)
+            
+            if current_sector_count >= max_per_sector:
+                # Skip this candidate - sector already has max positions
+                continue
+            
             # FIX v2: ATR-based stop loss
             stop_loss, atr_value = self.get_atr_stop(code, entry_price, price_history)
             
@@ -169,6 +191,7 @@ class PaperTrader:
                 "trade_id": f"{code}_{date_str}",
                 "code": code,
                 "name": name,
+                "sector": sector,
                 "entry_date": date_str,
                 "entry_price": entry_price,
                 "stop_loss": round(stop_loss, 2),
@@ -192,11 +215,30 @@ class PaperTrader:
             }
             
             new_trades.append(trade)
+            sector_counts[sector] = current_sector_count + 1
         
         self.trades.extend(new_trades)
         self.active_positions = [t for t in self.trades if t["status"] == "open"]
         
         return new_trades
+    
+    def _get_sector(self, stock_code):
+        """Get sector for a stock code.
+        
+        FIX v3: Use TWSE industry codes from company data via sectors module.
+        Falls back to 'other' if sector data not available.
+        """
+        # Import sectors module
+        try:
+            from sectors import get_sector, load_sector_mapping
+            # Load sector mapping once and cache it
+            if not hasattr(self, '_sector_map'):
+                self._sector_map = load_sector_mapping(str(self.data_dir))
+            return get_sector(stock_code, self._sector_map)
+        except ImportError:
+            return "other"
+        except:
+            return "unknown"
     
     def simulate_exit(self, trade, current_price, current_date):
         """Simulate exit for a single trade"""
@@ -301,15 +343,38 @@ class PaperTrader:
                         for j in range(entry_idx + 1, min(entry_idx + self.config["max_holding_days"] + 1, len(history))):
                             day = history[j]
                             price = day["close"]
+                            day_date = day["date"]
+                            
+                            # FIX v3: Skip stop-loss check on ex-dividend dates
+                            # Ex-dividend drops are mechanical, not market signals
+                            is_ex_div = False
+                            if self.corp_handler:
+                                is_ex_div = self.corp_handler.is_ex_dividend_date(code, day_date)
+                            
+                            if is_ex_div:
+                                # Adjust price for dividend to check against stop
+                                adj_price = self.corp_handler.adjust_price_for_dividend(price, code, day_date)
+                                if adj_price <= trade["stop_loss"]:
+                                    exit_price = trade["stop_loss"]
+                                    exit_date = day_date
+                                    exit_reason = "stop_loss"
+                                    break
+                                elif adj_price >= trade["take_profit"]:
+                                    exit_price = trade["take_profit"]
+                                    exit_date = day_date
+                                    exit_reason = "take_profit"
+                                    break
+                                # Otherwise continue - ex-div drop didn't trigger exit
+                                continue
                             
                             if price <= trade["stop_loss"]:
                                 exit_price = trade["stop_loss"]
-                                exit_date = day["date"]
+                                exit_date = day_date
                                 exit_reason = "stop_loss"
                                 break
                             elif price >= trade["take_profit"]:
                                 exit_price = trade["take_profit"]
-                                exit_date = day["date"]
+                                exit_date = day_date
                                 exit_reason = "take_profit"
                                 break
                         
