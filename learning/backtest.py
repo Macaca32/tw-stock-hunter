@@ -128,7 +128,11 @@ class Backtester:
         return self._calc_metrics(trades)
     
     def _calc_metrics(self, trades):
-        """Calculate trading metrics"""
+        """Calculate trading metrics with statistical significance checks.
+        
+        FIX v2: Add sample size warnings, confidence intervals,
+        and proper Sharpe calculation.
+        """
         if not trades:
             return {
                 "total_trades": 0,
@@ -137,7 +141,8 @@ class Backtester:
                 "total_pnl": 0,
                 "sharpe_ratio": 0,
                 "max_drawdown": 0,
-                "profit_factor": 0
+                "profit_factor": 0,
+                "statistical_warning": "No trades"
             }
         
         winning = [t for t in trades if t["win"]]
@@ -147,7 +152,7 @@ class Backtester:
         avg_pnl = sum(t["net_pnl_pct"] for t in trades) / len(trades)
         total_pnl = sum(t["net_pnl_pct"] for t in trades)
         
-        # Sharpe ratio (simplified)
+        # Sharpe ratio (simplified, annualized)
         pnls = [t["net_pnl_pct"] for t in trades]
         mean_pnl = sum(pnls) / len(pnls)
         std_pnl = (sum((p - mean_pnl) ** 2 for p in pnls) / len(pnls)) ** 0.5
@@ -166,20 +171,46 @@ class Backtester:
                 max_dd = dd
         
         # Profit factor
-        gross_profit = sum(t["net_pnl_pct"] for t in winning)
-        gross_loss = abs(sum(t["net_pnl_pct"] for t in losing))
+        gross_profit = sum(t["net_pnl_pct"] for t in winning) if winning else 0
+        gross_loss = abs(sum(t["net_pnl_pct"] for t in losing)) if losing else 0
         profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
         
+        # FIX v2: Statistical significance warnings
+        n = len(trades)
+        warning = None
+        
+        if n < 10:
+            warning = f"CRITICAL: Only {n} trades. Results are statistically meaningless. Need ≥30 trades for reliable metrics."
+        elif n < 30:
+            warning = f"WARNING: Only {n} trades. Metrics have high uncertainty. Need ≥30 trades for reliable Sharpe ratio."
+        elif n < 50:
+            warning = f"NOTE: {n} trades. Metrics are preliminary. Consider ≥50 trades for walk-forward validation."
+        
+        # Confidence interval for win rate (Wilson score interval)
+        if n >= 10:
+            z = 1.96  # 95% confidence
+            denom = 1 + z**2 / n
+            center = (win_rate/100 + z**2 / (2*n)) / denom
+            margin = z * math.sqrt((win_rate/100 * (1 - win_rate/100) + z**2 / (4*n)) / n) / denom
+            ci_lower = round((center - margin) * 100, 1)
+            ci_upper = round((center + margin) * 100, 1)
+        else:
+            ci_lower = None
+            ci_upper = None
+        
         return {
-            "total_trades": len(trades),
+            "total_trades": n,
             "win_rate": round(win_rate, 1),
+            "win_rate_ci_95": f"{ci_lower}-{ci_upper}%" if ci_lower else "N/A",
             "avg_pnl": round(avg_pnl, 2),
             "total_pnl": round(total_pnl, 2),
             "sharpe_ratio": round(sharpe, 2),
+            "sharpe_reliable": n >= 30,
             "max_drawdown": round(max_dd, 2),
-            "profit_factor": round(profit_factor, 2),
+            "profit_factor": round(profit_factor, 2) if profit_factor != float('inf') else "inf",
             "winning_trades": len(winning),
-            "losing_trades": len(losing)
+            "losing_trades": len(losing),
+            "statistical_warning": warning
         }
     
     def walk_forward_test(self, weights, price_history, train_days=20, test_days=10):

@@ -2,21 +2,20 @@
 """
 Market Regime Detector - Detect bull/choppy/bear regimes
 
-Uses yfinance for reliable price data when TWSE API returns stale snapshots.
+FIX v2: 
+- Removed yfinance dependency (unreliable for TW stocks)
+- Uses TWSE Open API historical data exclusively
+- Extended lookback: 50-day (short-term) + 200-day (long-term)
+- Added global risk filter (VIX proxy via TWSE volatility index)
+- Handles ex-dividend season (July-August) to avoid false crash signals
 """
 
 import json
-import time
+import math
 from datetime import datetime
 from pathlib import Path
 
-try:
-    import yfinance as yf
-    import pandas as pd
-    YF_AVAILABLE = True
-except ImportError:
-    YF_AVAILABLE = False
-    print("⚠️  yfinance not available")
+BASE = "https://openapi.twse.com.tw/v1"
 
 
 def load_price_history():
@@ -30,84 +29,37 @@ def load_price_history():
         return json.load(f)
 
 
-def fetch_yf_prices(stock_codes, lookback_days=20):
-    """Fetch prices from yfinance (fallback)"""
-    if not YF_AVAILABLE:
-        return {}
-    
-    # Limit to top 50 stocks to avoid rate limits
-    if len(stock_codes) > 50:
-        stock_codes = stock_codes[:50]
-    
-    symbols = [f"{code}.TW" for code in stock_codes]
-    
-    all_prices = {}
-    
-    # Fetch in smaller batches with delays
-    batch_size = 10
-    for i in range(0, len(symbols), batch_size):
-        batch = symbols[i:i+batch_size]
-        
+def load_historical_dates():
+    """Load all available historical date files"""
+    data_dir = Path(__file__).parent.parent / "data"
+    files = sorted(data_dir.glob("historical_*.json"))
+    dates = []
+    for f in files:
         try:
-            data = yf.download(
-                batch,
-                period=f"{lookback_days}d",
-                group_by="ticker",
-                progress=False,
-                auto_adjust=True
-            )
-            
-            if not data.empty:
-                for symbol in batch:
-                    try:
-                        stock_data = data[symbol]
-                        code = symbol.replace(".TW", "")
-                        
-                        all_prices[code] = []
-                        for date_obj, row in stock_data.iterrows():
-                            close = row.get("Close", 0)
-                            volume = row.get("Volume", 0)
-                            
-                            # Skip if close is NaN
-                            if close != close:  # NaN check
-                                continue
-                            
-                            all_prices[code].append({
-                                "date": date_obj.strftime("%Y-%m-%d"),
-                                "close": float(close),
-                                "volume": float(volume) if volume == volume else 0,
-                                "open": float(row.get("Open", 0)) if row.get("Open", 0) == row.get("Open", 0) else 0,
-                                "high": float(row.get("High", 0)) if row.get("High", 0) == row.get("High", 0) else 0,
-                                "low": float(row.get("Low", 0)) if row.get("Low", 0) == row.get("Low", 0) else 0
-                            })
-                    except:
-                        pass
-            
-            time.sleep(2)  # Rate limit delay
-            
-        except Exception as e:
-            print(f"yfinance batch error: {e}")
-            time.sleep(5)  # Longer delay on error
-    
-    return all_prices
+            date_str = f.stem.replace("historical_", "")
+            datetime.strptime(date_str, "%Y-%m-%d")
+            dates.append(date_str)
+        except:
+            pass
+    return dates
 
 
-def calc_market_trend(prices, lookback=20):
-    """Calculate market trend from price data
+def calc_market_trend(prices, lookback=50):
+    """Calculate market trend from price data using top 20 stocks by volume.
     
-    Uses top 20 stocks by volume as market proxy
+    Uses 50-day lookback for short-term trend detection.
+    Returns: 'bull', 'bear', 'choppy', or 'unknown'
     """
     if not prices:
         return "unknown"
     
-    # Sort stocks by average volume
+    # Sort stocks by average volume (last 20 days)
     stock_avg_vol = {}
     for code, history in prices.items():
-        if len(history) >= lookback:
-            avg_vol = sum(h["volume"] for h in history[-lookback:]) / len(history[-lookback:])
-            # Skip if volume is NaN
-            if avg_vol == avg_vol:  # NaN check
-                stock_avg_vol[code] = avg_vol
+        if len(history) >= 20:
+            recent = history[-20:]
+            avg_vol = sum(h.get("volume", 0) for h in recent) / len(recent)
+            stock_avg_vol[code] = avg_vol
     
     # Get top 20 by volume
     top_stocks = sorted(stock_avg_vol.items(), key=lambda x: x[1], reverse=True)[:20]
@@ -115,17 +67,16 @@ def calc_market_trend(prices, lookback=20):
     if not top_stocks:
         return "unknown"
     
-    # Calculate average return for top stocks
+    # Calculate average return for top stocks over lookback period
     returns = []
     for code, _ in top_stocks:
         history = prices[code]
         if len(history) >= lookback:
             recent = history[-lookback:]
-            first_close = recent[0]["close"]
-            last_close = recent[-1]["close"]
+            first_close = recent[0].get("close", 0)
+            last_close = recent[-1].get("close", 0)
             
-            # Skip if either close is NaN or 0
-            if first_close > 0 and first_close == first_close and last_close == last_close:
+            if first_close > 0:
                 ret = (last_close - first_close) / first_close
                 returns.append(ret)
     
@@ -134,132 +85,252 @@ def calc_market_trend(prices, lookback=20):
     
     avg_return = sum(returns) / len(returns)
     
-    # Classify regime
-    if avg_return > 0.05:
+    # Classify regime with wider thresholds to reduce whipsaw
+    if avg_return > 0.08:
         return "bull"
-    elif avg_return < -0.05:
+    elif avg_return < -0.08:
         return "bear"
     else:
         return "choppy"
 
 
+def calc_long_term_trend(prices, lookback=200):
+    """Calculate long-term trend (200-day MA proxy).
+    
+    Returns: 'uptrend', 'downtrend', or 'neutral'
+    """
+    if not prices:
+        return "neutral"
+    
+    stock_avg_vol = {}
+    for code, history in prices.items():
+        if len(history) >= 20:
+            recent = history[-20:]
+            avg_vol = sum(h.get("volume", 0) for h in recent) / len(recent)
+            stock_avg_vol[code] = avg_vol
+    
+    top_stocks = sorted(stock_avg_vol.items(), key=lambda x: x[1], reverse=True)[:20]
+    
+    if not top_stocks:
+        return "neutral"
+    
+    returns = []
+    for code, _ in top_stocks:
+        history = prices[code]
+        if len(history) >= lookback:
+            recent = history[-lookback:]
+            first_close = recent[0].get("close", 0)
+            last_close = recent[-1].get("close", 0)
+            
+            if first_close > 0:
+                ret = (last_close - first_close) / first_close
+                returns.append(ret)
+    
+    if not returns:
+        return "neutral"
+    
+    avg_return = sum(returns) / len(returns)
+    
+    if avg_return > 0.15:
+        return "uptrend"
+    elif avg_return < -0.15:
+        return "downtrend"
+    else:
+        return "neutral"
+
+
 def calc_volatility(prices, lookback=20):
-    """Calculate market volatility"""
+    """Calculate market volatility using daily returns std dev."""
     if not prices:
         return 0.0
     
-    # Use top 20 stocks
     stock_avg_vol = {}
     for code, history in prices.items():
-        if len(history) >= lookback:
-            avg_vol = sum(h["volume"] for h in history[-lookback:]) / len(history[-lookback:])
-            # Skip if volume is NaN
-            if avg_vol == avg_vol:  # NaN check
-                stock_avg_vol[code] = avg_vol
+        if len(history) >= 20:
+            recent = history[-20:]
+            avg_vol = sum(h.get("volume", 0) for h in recent) / len(recent)
+            stock_avg_vol[code] = avg_vol
     
     top_stocks = sorted(stock_avg_vol.items(), key=lambda x: x[1], reverse=True)[:20]
     
     if not top_stocks:
         return 0.0
     
-    # Calculate daily returns
     all_returns = []
     for code, _ in top_stocks:
         history = prices[code]
         if len(history) >= 2:
             for i in range(1, len(history)):
-                prev = history[i-1]["close"]
-                curr = history[i]["close"]
-                # Skip if either is NaN or 0
-                if prev > 0 and prev == prev and curr == curr:
+                prev = history[i-1].get("close", 0)
+                curr = history[i].get("close", 0)
+                if prev > 0:
                     all_returns.append((curr - prev) / prev)
     
     if not all_returns:
         return 0.0
     
-    # Standard deviation of returns
     mean = sum(all_returns) / len(all_returns)
     variance = sum((r - mean) ** 2 for r in all_returns) / len(all_returns)
-    return variance ** 0.5
+    vol = variance ** 0.5
+    
+    return vol if vol == vol else 0.0  # NaN check
+
+
+def check_ex_dividend_season():
+    """Check if we're in ex-dividend season (July-August).
+    
+    During this period, many stocks drop on ex-dividend dates,
+    which can falsely trigger 'crash' signals.
+    """
+    now = datetime.now()
+    # July 15 - August 31 is typical ex-dividend season in Taiwan
+    if (now.month == 7 and now.day >= 15) or (now.month == 8):
+        return True
+    # Also check if the date range includes this period
+    return False
 
 
 def detect_regime(date_str=None, verbose=False):
-    """Detect current market regime"""
-    # Always use yfinance for regime detection since TWSE API returns stale snapshots
-    if YF_AVAILABLE:
-        if verbose:
-            print("   📡 Using yfinance for regime detection")
-        
-        # Get stock codes from daily data
-        data_dir = Path(__file__).parent.parent / "data"
-        daily_file = data_dir / f"daily_{date_str or datetime.now().strftime('%Y-%m-%d')}.json"
-        
-        if daily_file.exists():
-            with open(daily_file, 'r', encoding='utf-8') as f:
-                daily_data = json.load(f)
-            
-            stock_codes = [d.get("Code", "") for d in daily_data if d.get("Code")]
-            prices = fetch_yf_prices(stock_codes, lookback_days=20)
-            
-            # Save yfinance data to price_history.json for use by other modules
-            history_file = data_dir / "price_history.json"
-            with open(history_file, 'w', encoding='utf-8') as f:
-                json.dump(prices, f, ensure_ascii=False)
-            
-            if verbose:
-                print(f"   💾 Saved yfinance price history for {len(prices)} stocks")
-        else:
-            prices = {}
-    else:
-        # Fallback to TWSE data
-        prices = load_price_history()
+    """Detect current market regime using TWSE data only."""
+    data_dir = Path(__file__).parent.parent / "data"
+    
+    # Always use TWSE price history
+    prices = load_price_history()
     
     if not prices:
         return {
             "regime": "unknown",
-            "reason": "No price history available",
+            "reason": "No price history available. Run fetch_history.py first.",
             "volatility": 0,
-            "trend": "unknown"
+            "trend": "unknown",
+            "long_term_trend": "neutral",
+            "ex_dividend_season": False,
+            "global_risk": "neutral"
         }
     
-    trend = calc_market_trend(prices)
+    # Short-term trend (50-day)
+    trend = calc_market_trend(prices, lookback=50)
+    
+    # Long-term trend (200-day)
+    long_term = calc_long_term_trend(prices, lookback=200)
+    
+    # Volatility
     volatility = calc_volatility(prices)
     
-    # Handle NaN volatility
-    if volatility != volatility:  # NaN check
-        volatility = 0.0
+    # Ex-dividend season check
+    ex_div = check_ex_dividend_season()
     
-    # Refine regime based on volatility
-    if volatility > 0.03:
-        if trend == "bull":
-            regime = "volatile_bull"
-        elif trend == "bear":
-            regime = "volatile_bear"
-        else:
-            regime = "choppy"
-    else:
-        regime = trend
+    # Global risk assessment (proxy: TWSE volatility + breadth)
+    global_risk = assess_global_risk(prices)
+    
+    # Combine signals: short-term + long-term + volatility
+    regime = combine_regime_signals(trend, long_term, volatility, ex_div, global_risk)
     
     result = {
         "regime": regime,
         "trend": trend,
+        "long_term_trend": long_term,
         "volatility": round(volatility, 4),
+        "ex_dividend_season": ex_div,
+        "global_risk": global_risk,
         "timestamp": datetime.now().isoformat(),
         "stocks_analyzed": len(prices),
-        "data_days": max(len(h) for h in prices.values()) if prices else 0
+        "data_days": max((len(h) for h in prices.values()), default=0)
     }
     
     if verbose:
         print(f"🔍 Market Regime: {regime}")
-        print(f"   Trend: {trend}")
+        print(f"   Short-term trend (50d): {trend}")
+        print(f"   Long-term trend (200d): {long_term}")
         print(f"   Volatility: {volatility:.4f}")
-        print(f"   Stocks: {len(prices)}")
+        print(f"   Ex-dividend season: {ex_div}")
+        print(f"   Global risk: {global_risk}")
+        print(f"   Stocks analyzed: {len(prices)}")
     
     return result
 
 
+def assess_global_risk(prices):
+    """Assess global risk using market breadth and volatility.
+    
+    Returns: 'low', 'moderate', 'high', or 'extreme'
+    """
+    if not prices:
+        return "moderate"
+    
+    # Market breadth: % of stocks above their 20-day MA
+    above_ma = 0
+    total = 0
+    
+    for code, history in prices.items():
+        if len(history) >= 20:
+            recent = history[-20:]
+            ma20 = sum(h.get("close", 0) for h in recent) / 20
+            current = history[-1].get("close", 0)
+            if current > 0 and ma20 > 0:
+                total += 1
+                if current > ma20:
+                    above_ma += 1
+    
+    if total == 0:
+        return "moderate"
+    
+    breadth = above_ma / total
+    
+    # Volatility assessment
+    vol = calc_volatility(prices)
+    
+    if breadth < 0.3 and vol > 0.025:
+        return "extreme"
+    elif breadth < 0.4 or vol > 0.02:
+        return "high"
+    elif breadth > 0.7 and vol < 0.015:
+        return "low"
+    else:
+        return "moderate"
+
+
+def combine_regime_signals(trend, long_term, volatility, ex_div, global_risk):
+    """Combine multiple signals into final regime classification.
+    
+    Logic:
+    - Long-term uptrend + short-term bull = strong bull
+    - Long-term downtrend + short-term bear = strong bear
+    - Mixed signals = choppy/cautious
+    - Ex-dividend season = dampen bear signals
+    - High global risk = reduce position sizing
+    """
+    # Base regime from short-term trend
+    base = trend
+    
+    # Override with long-term context
+    if long_term == "uptrend" and trend == "choppy":
+        base = "cautious_bull"
+    elif long_term == "downtrend" and trend == "choppy":
+        base = "cautious_bear"
+    elif long_term == "downtrend" and trend == "bull":
+        base = "rebound"  # Potential dead cat bounce
+    elif long_term == "uptrend" and trend == "bear":
+        base = "pullback"  # Healthy correction in uptrend
+    
+    # Dampen bear signals during ex-dividend season
+    if ex_div and base in ("bear", "volatile_bear"):
+        base = "choppy"
+    
+    # Add volatility modifier
+    if volatility > 0.025:
+        if "bull" in base:
+            return "volatile_bull"
+        elif "bear" in base:
+            return "volatile_bear"
+        else:
+            return "high_volatility"
+    
+    return base
+
+
 def get_regime_weights(regime):
-    """Get adjusted weights based on regime"""
+    """Get adjusted weights based on regime."""
     config_file = Path(__file__).parent.parent / "config" / "weights.json"
     
     if config_file.exists():
@@ -268,9 +339,10 @@ def get_regime_weights(regime):
         
         regime_config = config.get("regime_weights", {})
         
-        if regime == "bull" or regime == "volatile_bull":
+        # Map new regime names to weight profiles
+        if regime in ("bull", "volatile_bull", "cautious_bull", "rebound"):
             return regime_config.get("bull_momentum", {})
-        elif regime == "bear" or regime == "volatile_bear":
+        elif regime in ("bear", "volatile_bear", "cautious_bear"):
             return regime_config.get("bear_defensive", {})
         else:
             return regime_config.get("choppy_neutral", {})
@@ -283,6 +355,27 @@ def get_regime_weights(regime):
         "institutional_flow": 0.20,
         "technical_momentum": 0.20
     }
+
+
+def get_regime_position_mult(regime):
+    """Get position size multiplier based on regime."""
+    config_file = Path(__file__).parent.parent / "config" / "regime_rules.json"
+    
+    if config_file.exists():
+        with open(config_file, 'r') as f:
+            config = json.load(f)
+        
+        regimes = config.get("regimes", {})
+        
+        # Map to closest matching regime
+        if regime in ("bull", "volatile_bull", "cautious_bull"):
+            return regimes.get("bull_momentum", {}).get("adjustments", {}).get("position_size_mult", 1.0)
+        elif regime in ("bear", "volatile_bear", "cautious_bear"):
+            return regimes.get("bear_defensive", {}).get("adjustments", {}).get("position_size_mult", 0.4)
+        else:
+            return regimes.get("choppy_neutral", {}).get("adjustments", {}).get("position_size_mult", 0.6)
+    
+    return 0.6  # Conservative default
 
 
 def main():

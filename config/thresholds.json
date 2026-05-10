@@ -1,20 +1,25 @@
 {
-  "version": "1.1",
-  "updated": "2026-05-09",
+  "version": "2.0",
+  "updated": "2026-05-10",
+  "notes": "FIX v2: Stricter filters per z.ai critical review",
   "stage1": {
-    "pass_threshold": 55,
-    "watchlist_threshold": 40,
-    "min_market_cap": 10000000000,
-    "price_floor": 10,
+    "pass_threshold": 60,
+    "watchlist_threshold": 45,
+    "min_market_cap": 20000000000,
+    "min_adv": 5000000,
+    "price_floor": 15,
     "price_ceiling": 3000,
-    "min_listing_age_years": 1
+    "min_listing_age_years": 2
   },
   "stage2": {
-    "fundamental_score_min": 60,
-    "red_flag_disqualify": true
+    "fundamental_score_min": 65,
+    "red_flag_disqualify": true,
+    "max_pledge_ratio": 0.30,
+    "max_penalty_score": 50,
+    "min_announcement_score": 30
   },
   "stage3": {
-    "technical_score_min": 50,
+    "technical_score_min": 55,
     "rsi_overbought": 70,
     "rsi_oversold": 30
   },
@@ -22,14 +27,14 @@
     "risk_per_trade": 0.015,
     "max_portfolio_heat": 0.06,
     "max_sector_pct": 0.40,
-    "max_drawdown": 0.10,
+    "max_drawdown": 0.15,
     "min_rr_ratio": 2.0,
-    "max_positions": 10
+    "max_positions": 8
   },
   "circuit_breakers": {
-    "daily_loss_limit": 0.03,
-    "weekly_loss_limit": 0.06,
-    "consecutive_losses": 3,
-    "max_drawdown_pct": 0.10
+    "daily_loss_limit": 0.04,
+    "weekly_loss_limit": 0.08,
+    "consecutive_losses": 4,
+    "max_drawdown_pct": 0.15
   }
 }

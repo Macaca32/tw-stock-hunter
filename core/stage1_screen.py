@@ -80,8 +80,16 @@ def get_field(stock, chinese_key, english_key, default=""):
     return stock.get(chinese_key, stock.get(english_key, default))
 
 
-def check_hard_filters(stock, company_info, datasets, thresholds):
-    """Check hard filters - return True if stock PASSES all filters"""
+def check_hard_filters(stock, company_info, datasets, thresholds, price_history=None):
+    """Check hard filters - return True if stock PASSES all filters
+    
+    FIX v2: Stricter filters per z.ai review:
+    - ADV (Average Daily Volume) liquidity filter
+    - Stricter market cap minimum (5B TWD for TWSE, 2B for TPEx)
+    - Pledge ratio check (major shareholders pledged >30% = disqualify)
+    - Recent penalty check
+    - Revenue positivity (YoY revenue growth > -20%)
+    """
     stage1_thresh = thresholds["stage1"]
     
     # Get stock code (daily data uses English keys)
@@ -91,7 +99,22 @@ def check_hard_filters(stock, company_info, datasets, thresholds):
     close_raw = get_field(stock, "收盤價", "ClosingPrice", "")
     close = safe_float(close_raw, 0)
     if close == 0:
-        return False, "No closing price"
+        return False, "no_closing_price"
+    
+    # === LIQUIDITY FILTER (ADV) ===
+    # Minimum average daily volume to ensure we can enter/exit positions
+    adv_threshold = stage1_thresh.get("min_adv", 5000000)  # 5M shares/day default
+    if price_history and stock_code in price_history:
+        history = price_history[stock_code]
+        if len(history) >= 20:
+            avg_vol = sum(h.get("volume", 0) for h in history[-20:]) / min(20, len(history))
+            if avg_vol < adv_threshold:
+                return False, "insufficient_liquidity"
+        elif len(history) > 0:
+            # Fallback: use last 5 days if we don't have 20
+            avg_vol = sum(h.get("volume", 0) for h in history[-5:]) / min(5, len(history))
+            if avg_vol < adv_threshold * 0.5:  # Lower threshold for short history
+                return False, "insufficient_liquidity"
     
     # Market cap filter (use company info if available)
     if company_info:
@@ -118,6 +141,35 @@ def check_hard_filters(stock, company_info, datasets, thresholds):
                 years_listed = (datetime.now() - list_date).days / 365
                 if years_listed < stage1_thresh["min_listing_age_years"]:
                     return False, "too_new_listing"
+    
+    # === PLEDGE RISK CHECK ===
+    # Major shareholders with >30% pledged shares = governance red flag
+    pledge_data = datasets.get("pledge", [])
+    for p in pledge_data:
+        if get_field(p, "公司代號", "Code", "") == stock_code:
+            pledged = safe_float(get_field(p, "累計質押股數", "total_pledged", ""), 0)
+            # If we have company info, check against paid-in capital
+            if company_info and pledged > 0:
+                paid_in = safe_float(get_field(company_info, "實收資本額", "paid_in_capital", ""), 0)
+                if paid_in > 0:
+                    pledge_ratio = pledged / paid_in
+                    if pledge_ratio > 0.30:
+                        return False, "high_pledge_risk"
+    
+    # === RECENT PENALTY CHECK ===
+    penalty_data = datasets.get("penalties", [])
+    for p in penalty_data:
+        if get_field(p, "公司代號", "Code", "") == stock_code:
+            date_str = get_field(p, "處分日期", "penalty_date", "")
+            if date_str:
+                try:
+                    penalty_date = datetime.strptime(str(date_str)[:8], "%Y%m%d")
+                    days_ago = (datetime.now() - penalty_date).days
+                    # Disqualify if penalty within last 180 days
+                    if days_ago < 180:
+                        return False, "recent_penalty"
+                except:
+                    pass
     
     # Check sanctions
     sanctions = datasets.get("sanctions", [])
@@ -616,8 +668,8 @@ def run_stage1(date_str=None, verbose=False):
         # Get company info for this stock
         company_info = company_lookup.get(code)
         
-        # Hard filters (pass company_info for market cap calc)
-        passes, reason = check_hard_filters(stock, company_info, datasets, thresholds)
+        # Hard filters (pass company_info for market cap calc, price_history for ADV)
+        passes, reason = check_hard_filters(stock, company_info, datasets, thresholds, price_history=price_history)
         if not passes:
             rejected.append({"code": code, "name": name, "reason": reason})
             continue

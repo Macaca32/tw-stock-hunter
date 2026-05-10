@@ -210,7 +210,14 @@ def check_penalty_risk(stock_code, penalty_data):
 
 
 def run_stage2(date_str=None, verbose=False):
-    """Run Stage 2 deep-dive on Stage 1 candidates"""
+    """Run Stage 2 deep-dive on Stage 1 candidates
+    
+    FIX v2: Actually disqualify stocks with red flags:
+    - Pledge ratio >30% = disqualify
+    - Recent penalties (within 180 days) = disqualify  
+    - Negative announcements (裁員, 減資, 虧損) = disqualify
+    - Combined score threshold raised
+    """
     stage1_results = load_stage1_results(date_str)
     datasets, date = load_data(date_str)
     weights, thresholds = load_config()
@@ -226,6 +233,7 @@ def run_stage2(date_str=None, verbose=False):
     if verbose:
         print(f"🔬 Stage 2: Deep-diving {len(candidates)} candidates")
         print(f"   Stage 2 min score: {thresholds['stage2']['fundamental_score_min']}")
+        print(f"   Red flag disqualification: {thresholds['stage2'].get('red_flag_disqualify', True)}")
         print()
     
     deep_results = []
@@ -242,6 +250,44 @@ def run_stage2(date_str=None, verbose=False):
         sh_score, sh_status = check_major_shareholders(code, major_sh_data)
         pledge_score, pledge_status = check_pledge_risk(code, pledge_data)
         penalty_score, penalty_status = check_penalty_risk(code, penalty_data)
+        
+        # === RED FLAG DISQUALIFICATION ===
+        # FIX v2: Actually enforce red flags
+        red_flags = []
+        
+        if thresholds["stage2"].get("red_flag_disqualify", True):
+            # Pledge risk: score < 40 means high pledge
+            if pledge_score < 40:
+                red_flags.append(f"High pledge risk (score={pledge_score}, status={pledge_status})")
+            
+            # Recent penalties: score < 50 means concerning
+            if penalty_score < 50:
+                red_flags.append(f"Penalty risk (score={penalty_score}, status={penalty_status})")
+            
+            # Negative announcements: score < 30 means serious issues
+            if ann_score < 30:
+                red_flags.append(f"Negative announcements (score={ann_score}, status={ann_status})")
+        
+        if red_flags:
+            result = {
+                "code": code,
+                "name": name,
+                "stage1_score": stage1_score,
+                "stage2_score": 0,
+                "red_flags": red_flags,
+                "checks": {
+                    "dividend": {"score": div_score, "status": div_status},
+                    "announcements": {"score": ann_score, "status": ann_status},
+                    "shareholders": {"score": sh_score, "status": sh_status},
+                    "pledge": {"score": pledge_score, "status": pledge_status},
+                    "penalties": {"score": penalty_score, "status": penalty_status}
+                },
+                "combined_score": 0
+            }
+            disqualified.append(result)
+            if verbose:
+                print(f"   ❌ DISQUALIFIED {code} {name}: {'; '.join(red_flags)}")
+            continue
         
         # Weighted Stage 2 score
         stage2_weights = weights.get("stage2", {})
@@ -267,12 +313,6 @@ def run_stage2(date_str=None, verbose=False):
             },
             "combined_score": round((stage1_score * 0.6 + fundamental_score * 0.4), 1)
         }
-        
-        # Red flag disqualification
-        if thresholds["stage2"]["red_flag_disqualify"]:
-            if penalty_score < 20 or pledge_score < 20:
-                disqualified.append(result)
-                continue
         
         if fundamental_score >= thresholds["stage2"]["fundamental_score_min"]:
             deep_results.append(result)

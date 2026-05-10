@@ -1,6 +1,7 @@
 {
-  "version": "1.0",
-  "updated": "2026-05-09",
+  "version": "2.0",
+  "updated": "2026-05-10",
+  "notes": "FIX v2: Extended lookback + global risk filter per z.ai review",
   "regimes": {
     "bull_momentum": {
       "description": "Strong uptrend, high volume, foreign buying",
@@ -47,8 +48,15 @@
     }
   },
   "detection": {
-    "lookback_days": 20,
+    "short_term_lookback": 50,
+    "long_term_lookback": 200,
     "volume_window": 20,
-    "foreign_flow_window": 5
+    "foreign_flow_window": 5,
+    "ex_dividend_season": {
+      "start_month": 7,
+      "start_day": 15,
+      "end_month": 8,
+      "end_day": 31
+    }
   }
 }
