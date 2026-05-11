@@ -5,9 +5,9 @@
   "stage1": {
     "pass_threshold": 60,
     "watchlist_threshold": 45,
-    "min_market_cap": 50000000000,
-    "min_market_cap_tpex": 30000000000,
-    "min_adv_twd": 100000000,
+    "min_market_cap": 30000000000,
+    "min_market_cap_tpex": 20000000000,
+    "min_adv_twd": 50000000,
     "price_floor": 15,
     "price_ceiling": 3000,
     "min_listing_age_years": 2
