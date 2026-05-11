@@ -61,9 +61,9 @@
     }
   ],
   "notes": "Phase 0-7 done. Phase 8 (integration testing) is the final validation step.",
-  "rounds_completed": 5,
+  "rounds_completed": 6,
   "last_zai_round": {
-    "round": 5,
+    "round": 6,
     "date": "2026-05-11",
     "findings": [
       "stock_div /100 \u2192 /10 (Taiwan \u5143 convention)",
@@ -77,6 +77,24 @@
       "Regime migration fix: old names force immediate transition",
       "Added dividends + major_sh to load_data() optional datasets"
     ],
-    "status": "completed - all fixes verified"
-  }
+    "status": "completed - all R5 items addressed"
+  },
+  "history": [
+    {
+      "round": 6,
+      "date": "2026-05-11",
+      "items_addressed": [
+        "Score quantization \u2192 continuous scoring (was only 2 unique div scores)",
+        "normalize_stock_id() utility for data matching",
+        "Stage 1 threshold tuning: market_cap NT\\$50B\u2192NT\\$30B, adv NT\\$100M\u2192NT\\$50M",
+        "Regime cross-check against TAIEX drawdown (verified crisis label)",
+        "Volume adjustment already applied from R4"
+      ],
+      "result": {
+        "stage1_passed": 94,
+        "stage2_unique_scores": 35,
+        "regime_verified": true
+      }
+    }
+  ]
 }
