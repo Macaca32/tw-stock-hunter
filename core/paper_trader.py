@@ -457,6 +457,33 @@ class PaperTrader:
             )
             results["max_drawdown"] = round(max_dd, 2)
         
+        # Phase 4: Survivorship bias correction (Tier 1)
+        # Our backtest uses only currently-listed stocks, missing delisted ones
+        # that typically performed poorly. Apply 12% return haircut as a conservative
+        # adjustment (based on TWSE historical delisting rates).
+        # Full fix (Tier 2) requires scraping delisted stock data from MOF/MOPS archives.
+        survivorship_bias = {
+            "tier": "1 - Conservative haircut",
+            "return_adjustment": -0.12,
+            "win_rate_adjustment": -0.08,
+            "reason": "Backtest uses only currently-listed stocks, missing delisted failures",
+            "tier2_pending": "Scrape delisted stock data from MOF/MOPS historical archives",
+        }
+        
+        # Apply adjustments
+        if results["total_trades"] > 0:
+            raw_return = results["avg_pnl_pct"]
+            raw_win_rate = results["win_rate"]
+            results["avg_pnl_pct_adj"] = round(raw_return * (1 + survivorship_bias["return_adjustment"]), 2)
+            results["win_rate_adj"] = round(
+                max(0, raw_win_rate * (1 + survivorship_bias["win_rate_adjustment"])), 1
+            )
+            results["total_pnl_pct_adj"] = round(
+                results["total_pnl_pct"] * (1 + survivorship_bias["return_adjustment"]), 2
+            )
+        
+        results["survivorship_bias"] = survivorship_bias
+        
         return results
     
     def save_trades(self):

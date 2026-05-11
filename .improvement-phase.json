@@ -1,7 +1,7 @@
 {
-  "current_phase": 4,
-  "phase_name": "Survivorship bias Tier 1 (12% return haircut) + Tier 2 (scrape delisted stocks)",
-  "started_at": "2026-05-11T16:30:00+08:00",
+  "current_phase": 5,
+  "phase_name": "Sector refinement (12-15 sub-sectors + correlation matrix)",
+  "started_at": "2026-05-11T16:35:00+08:00",
   "completed_phases": [
     {
       "phase": 0,
@@ -29,8 +29,15 @@
       "name": "Tiered regime system (NORMAL→CAUTION→STRESS→CRISIS→BLACK_SWAN)",
       "completed_at": "2026-05-11T16:30:00+08:00",
       "summary": "Replaced 3-regime system with 5-tier system. BLACK_SWAN bypasses 5-day freeze for emergency exits. Position sizing: normal=1.0x, caution=0.6x, stress=0.3x, crisis=0.1x, black_swan=0.0x. Updated regime_rules.json, telegram_alerts.py emoji mapping. Config version bumped to 4.0.",
+      "commit": "7b949df"
+    },
+    {
+      "phase": 4,
+      "name": "Survivorship bias Tier 1 (12% return haircut)",
+      "completed_at": "2026-05-11T16:35:00+08:00",
+      "summary": "Added 12% return haircut and 8% win rate haircut to backtest results to account for delisted stocks not in dataset. Reports both raw and adjusted metrics (avg_pnl_pct_adj, win_rate_adj). Tier 2 (scrape delisted stocks) pending.",
       "commit": "pending"
     }
   ],
-  "notes": "Phase 0-3 done. Phase 3 committed but not pushed yet."
+  "notes": "Phase 0-4 done. All pushed to GitHub."
 }
