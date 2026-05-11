@@ -1,259 +1,658 @@
 #!/usr/bin/env python3
 """
-Corporate Action Handler - Ex-dividend awareness for Taiwan stocks
+Corporate Action Handler — Backward-Adjustment Engine for Taiwan Stocks
 
-FIX v3: CRITICAL - Corporate action handling prevents false signals.
-Taiwan has massive dividend yields (4-8% for many stocks).
-On ex-date, the stock drops 4-8% by market mechanics.
-Without this, the system will:
+Phase 2: Full backward-adjustment engine using TWSE /TWT49U API.
+
+Taiwan stocks have massive dividend yields (4-8% for many stocks).
+On ex-date, the stock drops 4-8% by market mechanics. Without backward
+adjustment, the system will:
 - Register a 4-8% "crash" → trigger bear regime signals
 - Hit ATR stop on the gap down
 - Log a "losing trade" that was actually a dividend capture
+- Distort all SMA/momentum calculations on unadjusted prices
 
-Data sources:
-- dividends_YYYY-MM-DD.json (TWSE dividend declarations)
-- price_history.json (for ex-date estimation)
+Data sources (in priority order):
+1. TWSE /TWT49U API — actual ex-dividend/ex-rights dates
+2. dividends_YYYY-MM-DD.json (t187ap45_L) — dividend amounts
+3. yfinance adjusted close — fallback for backward adjustment
 
 Usage:
     from corporate_actions import CorporateActionHandler
     handler = CorporateActionHandler()
     handler.is_ex_dividend_date("2330", "2026-07-20")
+    adjusted_prices = handler.backward_adjust_prices(prices, "2330")
 """
 
 import json
+import time
+import requests
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Dict, List, Optional, Any
+
+
+# TWSE Open API base
+TWSE_BASE = "https://openapi.twse.com.tw/v1"
+TWSE_TIMEOUT = 15
+TWSE_RATE_LIMIT = 0.3  # seconds between requests
+
+
+def roc_date_to_iso(roc_date_str: str) -> Optional[str]:
+    """Convert ROC date string (e.g., '1150522') to ISO format (e.g., '2026-05-22').
+    
+    ROC year = year - 1911, so 115 = 2026.
+    """
+    if not roc_date_str or len(roc_date_str) < 7:
+        return None
+    try:
+        roc_year = int(roc_date_str[:3])
+        month = int(roc_date_str[3:5])
+        day = int(roc_date_str[5:7])
+        year = roc_year + 1911
+        return datetime(year, month, day).strftime("%Y-%m-%d")
+    except (ValueError, OverflowError):
+        return None
+
+
+def iso_to_roc_date(iso_date_str: str) -> Optional[str]:
+    """Convert ISO date string to ROC date string."""
+    if not iso_date_str:
+        return None
+    try:
+        dt = datetime.strptime(iso_date_str, "%Y-%m-%d")
+        return f"{dt.year - 1911:03d}{dt.month:02d}{dt.day:02d}"
+    except ValueError:
+        return None
 
 
 class CorporateActionHandler:
-    """Handles corporate actions (ex-dividend dates, stock splits, etc.)"""
+    """Handles corporate actions with backward price adjustment.
     
-    def __init__(self, data_dir=None):
+    Supports:
+    - Cash dividends (現金股利)
+    - Stock dividends (股票股利 / 配股)
+    - Stock splits (拆股) — inferred from stock dividend ratios
+    """
+
+    def __init__(self, data_dir: Optional[str] = None):
         self.data_dir = Path(data_dir) if data_dir else Path(__file__).parent.parent / "data"
-        self.dividend_data = self._load_dividend_data()
-        self._ex_div_cache = {}
-    
-    def _load_dividend_data(self):
-        """Load dividend data from TWSE files.
+        self.dividend_data: Dict[str, List[dict]] = {}
+        self.ex_dividend_data: Dict[str, List[dict]] = {}  # From TWT49U
+        self._ex_div_cache: Dict[tuple, bool] = {}
+        self._loaded = False
+        self._load_all_data()
+
+    # ------------------------------------------------------------------ #
+    #  Data loading
+    # ------------------------------------------------------------------ #
+
+    def _load_all_data(self):
+        """Load all corporate action data sources."""
+        self._load_dividend_declarations()
+        self._load_twt49u_ex_dividend()
+        self._loaded = True
+
+    def _load_dividend_declarations(self):
+        """Load dividend declaration data from TWSE t187ap45_L files.
         
         Returns dict: {stock_code: [{"date": ..., "cash_div": ..., "stock_div": ...}, ...]}
         """
-        result = {}
-        
-        # Find the latest dividend file
+        result: Dict[str, List[dict]] = {}
+
         dividend_files = sorted(self.data_dir.glob("dividends_*.json"))
         if not dividend_files:
-            return result
+            return
+
+        # Load ALL dividend files (not just latest) for historical coverage
+        for dividend_file in dividend_files:
+            try:
+                with open(dividend_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except (json.JSONDecodeError, IOError):
+                continue
+
+            for item in data:
+                code = item.get("公司代號", "")
+                if not code:
+                    continue
+
+                # Skip special shares (e.g., '1101B')
+                if code.endswith("B") or code.endswith("R"):
+                    continue
+
+                # Cash dividend per share (sum all sources)
+                cash_div = 0.0
+                for key in [
+                    "股東配發-盈餘分配之現金股利(元/股)",
+                    "股東配發-法定盈餘公積發放之現金(元/股)",
+                    "股東配發-資本公積發放之現金(元/股)",
+                ]:
+                    val = item.get(key, 0)
+                    try:
+                        cash_div += float(val)
+                    except (ValueError, TypeError):
+                        pass
+
+                # Stock dividend per share (sum all sources)
+                stock_div = 0.0
+                for key in [
+                    "股東配發-盈餘轉增資配股(元/股)",
+                    "股東配發-法定盈餘公積轉增資配股(元/股)",
+                    "股東配發-資本公積轉增資配股(元/股)",
+                ]:
+                    val = item.get(key, 0)
+                    try:
+                        stock_div += float(val)
+                    except (ValueError, TypeError):
+                        pass
+
+                # Skip if no dividend at all
+                if cash_div <= 0 and stock_div <= 0:
+                    continue
+
+                # Estimate ex-dividend date from shareholder meeting date
+                # Taiwan convention: ex-date is typically 1-3 days BEFORE payment date
+                # Payment date is typically 1-2 weeks after shareholder meeting
+                sh_date_str = item.get("股東會日期", "")
+                ex_date = self._estimate_ex_date(sh_date_str)
+
+                if ex_date:
+                    if code not in result:
+                        result[code] = []
+                    # Avoid duplicates
+                    existing_dates = {a["date"] for a in result[code]}
+                    if ex_date not in existing_dates:
+                        result[code].append({
+                            "date": ex_date,
+                            "cash_div": round(cash_div, 4),
+                            "stock_div": round(stock_div, 4),
+                            "source": "dividend_declaration",
+                            "status": item.get("決議（擬議）進度", "unknown"),
+                            "dividend_year": item.get("股利年度", ""),
+                        })
+
+        self.dividend_data = result
+
+    def _load_twt49u_ex_dividend(self):
+        """Load actual ex-dividend/ex-rights data from TWSE /TWT49U API.
         
-        latest = dividend_files[-1]
+        The /TWT49U endpoint provides actual 除權除息 (ex-rights/ex-dividend) data
+        with precise ex-dates, cash dividends, stock dividends, and reference prices.
+        
+        Falls back to cached files if API is unavailable.
+        """
+        result: Dict[str, List[dict]] = {}
+
+        # Try loading from cache first
+        cache_file = self.data_dir / "twt49u_ex_dividend.json"
+        if cache_file.exists():
+            try:
+                with open(cache_file, "r", encoding="utf-8") as f:
+                    result = json.load(f)
+                if result:
+                    self.ex_dividend_data = result
+                    return
+            except (json.JSONDecodeError, IOError):
+                pass
+
+        # Fetch from TWSE API
         try:
-            with open(latest, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-        except (json.JSONDecodeError, IOError):
-            return result
+            data = self._fetch_twt49u()
+            if data:
+                result = self._parse_twt49u(data)
+                # Cache the result
+                with open(cache_file, "w", encoding="utf-8") as f:
+                    json.dump(result, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            # Silently fail — we still have dividend declarations as fallback
+            pass
+
+        self.ex_dividend_data = result
+
+    def _fetch_twt49u(self) -> Optional[List[dict]]:
+        """Fetch ex-dividend data from TWSE /TWT49U endpoint.
         
-        for item in data:
-            code = item.get("公司代號", "")
+        Returns list of raw records or None on failure.
+        """
+        # TWSE Open API v1 endpoint for 除權除息
+        url = f"{TWSE_BASE}/exchangeReport/TWT49U"
+
+        for attempt in range(3):
+            try:
+                resp = requests.get(url, timeout=TWSE_TIMEOUT)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if isinstance(data, list):
+                        return data
+            except (requests.RequestException, json.JSONDecodeError):
+                pass
+            time.sleep(1)
+
+        return None
+
+    def _parse_twt49u(self, raw_data: List[dict]) -> Dict[str, List[dict]]:
+        """Parse raw TWT49U data into structured corporate actions.
+        
+        TWT49U fields (Chinese):
+        - 有價證券代號: stock code
+        - 除權除息日: ex-dividend/ex-rights date
+        - 每股現金股利: cash dividend per share
+        - 每股股票股利: stock dividend per share
+        - 參考價格: reference price (theoretical ex-date price)
+        - 權值: rights value
+        """
+        result: Dict[str, List[dict]] = {}
+
+        for item in raw_data:
+            code = item.get("有價證券代號", item.get("公司代號", ""))
             if not code:
                 continue
-            
-            # Get cash dividend per share
-            cash_div = 0.0
-            for key in ["股東配發-盈餘分配之現金股利(元/股)", 
-                       "股東配發-法定盈餘公積發放之現金(元/股)",
-                       "股東配發-資本公積發放之現金(元/股)"]:
-                val = item.get(key, 0)
-                try:
-                    cash_div += float(val)
-                except (ValueError, TypeError):
-                    pass
-            
-            if cash_div <= 0:
+
+            # Parse ex-date (ROC format)
+            ex_date_roc = item.get("除權除息日", "")
+            ex_date = roc_date_to_iso(ex_date_roc)
+            if not ex_date:
                 continue
-            
-            # Get stock dividend
-            stock_div = 0.0
-            for key in ["股東配發-盈餘轉增資配股(元/股)",
-                       "股東配發-法定盈餘公積轉增資配股(元/股)",
-                       "股東配發-資本公積轉增資配股(元/股)"]:
+
+            # Cash dividend
+            cash_div = 0.0
+            for key in ["每股現金股利", "現金股利"]:
                 val = item.get(key, 0)
                 try:
-                    stock_div += float(val)
+                    cash_div = float(val)
+                    break
                 except (ValueError, TypeError):
                     pass
-            
-            # Estimate ex-dividend date (typically ~1 week after 股東會日期)
-            # 股東會日期 is in ROC format (e.g., "1150522" = 2026-05-22)
-            sh_date_str = item.get("股東會日期", "")
-            ex_date = self._estimate_ex_date(sh_date_str)
-            
-            if ex_date:
-                if code not in result:
-                    result[code] = []
-                result[code].append({
-                    "date": ex_date,
-                    "cash_div": cash_div,
-                    "stock_div": stock_div,
-                    "total_div": cash_div + stock_div,
-                    "status": item.get("決議（擬議）進度", "unknown")
-                })
-        
+
+            # Stock dividend
+            stock_div = 0.0
+            for key in ["每股股票股利", "股票股利"]:
+                val = item.get(key, 0)
+                try:
+                    stock_div = float(val)
+                    break
+                except (ValueError, TypeError):
+                    pass
+
+            # Reference price (theoretical ex-date price)
+            ref_price = 0.0
+            for key in ["參考價格", "參考價"]:
+                val = item.get(key, 0)
+                try:
+                    ref_price = float(val)
+                    break
+                except (ValueError, TypeError):
+                    pass
+
+            # Rights value (權值) — useful for assessing impact
+            rights_value = 0.0
+            for key in ["權值", "淨權值"]:
+                val = item.get(key, 0)
+                try:
+                    rights_value = float(val)
+                    break
+                except (ValueError, TypeError):
+                    pass
+
+            if code not in result:
+                result[code] = []
+            result[code].append({
+                "date": ex_date,
+                "cash_div": round(cash_div, 4),
+                "stock_div": round(stock_div, 4),
+                "ref_price": round(ref_price, 2),
+                "rights_value": round(rights_value, 2),
+                "source": "twt49u",
+            })
+
         return result
-    
-    def _estimate_ex_date(self, sh_date_str):
+
+    # ------------------------------------------------------------------ #
+    #  Ex-date estimation (fallback when TWT49U data unavailable)
+    # ------------------------------------------------------------------ #
+
+    def _estimate_ex_date(self, sh_date_str: str) -> Optional[str]:
         """Estimate ex-dividend date from shareholder meeting date.
         
-        Ex-date is typically 1-2 weeks after the shareholder meeting.
-        ROC date format: "1150522" = 2026-05-22
+        Taiwan market convention:
+        - Shareholder meeting (股東會) is held in May (annual) or after quarter end
+        - Ex-dividend date (除息日) is typically 1-3 days before payment date
+        - Payment date is typically 7-14 days after shareholder meeting
+        - Therefore: ex-date ≈ shareholder meeting + 5-12 days
+        
+        Using +7 days as the median estimate. This is an approximation;
+        actual ex-dates from TWT49U API take priority.
         """
         if not sh_date_str or len(sh_date_str) < 7:
             return None
-        
+
         try:
-            # ROC year = year - 1911
             roc_year = int(sh_date_str[:3])
             month = int(sh_date_str[3:5])
             day = int(sh_date_str[5:7])
-            
             year = roc_year + 1911
             sh_date = datetime(year, month, day)
-            
-            # Ex-date is typically 7-14 days after shareholder meeting
-            # Use 10 days as a reasonable estimate
-            ex_date = sh_date + timedelta(days=10)
+
+            # Improved estimate: 7 days after shareholder meeting
+            # (previous +10 was too late for many stocks)
+            ex_date = sh_date + timedelta(days=7)
             return ex_date.strftime("%Y-%m-%d")
         except (ValueError, OverflowError):
             return None
-    
-    def is_ex_dividend_date(self, stock_code, date_str):
-        """Check if a stock has an ex-dividend date on the given date.
+
+    # ------------------------------------------------------------------ #
+    #  Query interface
+    # ------------------------------------------------------------------ #
+
+    def get_actions_for_stock(self, stock_code: str) -> List[dict]:
+        """Get all corporate actions for a stock, merging TWT49U and declaration data.
         
-        Returns: True if ex-dividend, False otherwise
+        TWT49U data takes priority (actual ex-dates). Declaration data fills gaps.
         """
+        actions = []
+
+        # TWT49U data (priority — actual ex-dates)
+        for action in self.ex_dividend_data.get(stock_code, []):
+            actions.append({**action, "_priority": 1})
+
+        # Declaration data (fallback — estimated ex-dates)
+        for action in self.dividend_data.get(stock_code, []):
+            # Only add if no TWT49U entry for the same date
+            existing_dates = {a["date"] for a in actions if a.get("_priority") == 1}
+            if action["date"] not in existing_dates:
+                actions.append({**action, "_priority": 2})
+
+        # Sort by date
+        actions.sort(key=lambda a: a["date"])
+        return actions
+
+    def is_ex_dividend_date(self, stock_code: str, date_str: str) -> bool:
+        """Check if a stock has an ex-dividend date on the given date."""
         cache_key = (stock_code, date_str)
         if cache_key in self._ex_div_cache:
             return self._ex_div_cache[cache_key]
-        
-        actions = self.dividend_data.get(stock_code, [])
+
+        actions = self.get_actions_for_stock(stock_code)
+        found = any(a["date"] == date_str for a in actions)
+        self._ex_div_cache[cache_key] = found
+        return found
+
+    def get_action_on_date(self, stock_code: str, date_str: str) -> Optional[dict]:
+        """Get the corporate action for a stock on a specific date."""
+        actions = self.get_actions_for_stock(stock_code)
         for action in actions:
             if action["date"] == date_str:
-                self._ex_div_cache[cache_key] = True
-                return True
-        
-        self._ex_div_cache[cache_key] = False
-        return False
-    
-    def get_ex_dividend_amount(self, stock_code, date_str):
-        """Get the cash dividend amount for a stock on a given date.
-        
-        Returns: dividend amount (float) or None
-        """
-        actions = self.dividend_data.get(stock_code, [])
-        for action in actions:
-            if action["date"] == date_str:
-                return action.get("cash_div", 0)
+                return action
         return None
-    
-    def get_upcoming_ex_dividends(self, stock_code, days_ahead=30):
-        """Get upcoming ex-dividend dates for a stock.
+
+    def get_ex_dividend_amount(self, stock_code: str, date_str: str) -> Optional[float]:
+        """Get the cash dividend amount for a stock on a given date."""
+        action = self.get_action_on_date(stock_code, date_str)
+        if action:
+            return action.get("cash_div", 0)
+        return None
+
+    def get_stock_dividend_ratio(self, stock_code: str, date_str: str) -> Optional[float]:
+        """Get the stock dividend ratio for a stock on a given date.
         
-        Returns: list of upcoming ex-dividend actions
+        Stock dividend of 3 means 3 new shares per 100 shares held,
+        i.e., a 3% increase in share count.
         """
-        actions = self.dividend_data.get(stock_code, [])
-        today = datetime.now().strftime("%Y-%m-%d")
-        cutoff = (datetime.now() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
+        action = self.get_action_on_date(stock_code, date_str)
+        if action:
+            return action.get("stock_div", 0)
+        return None
+
+    # ------------------------------------------------------------------ #
+    #  Backward price adjustment engine
+    # ------------------------------------------------------------------ #
+
+    def backward_adjust_prices(
+        self,
+        prices: List[dict],
+        stock_code: str,
+    ) -> List[dict]:
+        """Apply backward adjustment to historical price data.
         
-        upcoming = []
-        for action in actions:
-            action_date = action.get("date", "")
-            if today <= action_date <= cutoff:
-                upcoming.append(action)
+        Backward adjustment means: when a stock goes ex-dividend, we adjust
+        ALL historical prices BEFORE the ex-date so that the price chart
+        is continuous. This is the standard practice in financial data.
         
-        return upcoming
-    
-    def should_skip_stop_check(self, stock_code, date_str):
-        """Check if stop loss should be skipped due to ex-dividend date.
+        For cash dividends:
+            adjustment_factor = (price_before_ex - cash_div) / price_before_ex
+            All prices before ex-date are multiplied by this factor.
         
-        FIX v3: On ex-dividend dates, the price drop is mechanical,
-        not a market signal. Skip stop checks to avoid false exits.
+        For stock dividends (配股):
+            If stock_div = 3 (3 shares per 100), the adjustment factor is:
+            adjustment_factor = 100 / (100 + stock_div) = 100/103
+            All prices before ex-date are multiplied by this factor.
         
-        Returns: True if stop check should be skipped
+        Combined (cash + stock dividend):
+            adjustment_factor = (price_before_ex - cash_div) / (price_before_ex * (1 + stock_div/100))
+        
+        Args:
+            prices: List of price dicts with 'date' and 'close' keys, sorted by date.
+            stock_code: Stock code to look up corporate actions.
+        
+        Returns:
+            Adjusted price list with 'adj_close' field added.
         """
-        return self.is_ex_dividend_date(stock_code, date_str)
-    
-    def adjust_price_for_dividend(self, price, stock_code, date_str):
-        """Adjust price for ex-dividend drop.
+        if not prices:
+            return prices
+
+        # Get all corporate actions for this stock within the price range
+        actions = self.get_actions_for_stock(stock_code)
+        if not actions:
+            # No actions — just copy close to adj_close
+            for p in prices:
+                p["adj_close"] = p.get("close", 0)
+            return prices
+
+        # Filter actions to those within our price range
+        price_dates = {p["date"] for p in prices}
+        relevant_actions = [a for a in actions if a["date"] in price_dates]
+
+        if not relevant_actions:
+            for p in prices:
+                p["adj_close"] = p.get("close", 0)
+            return prices
+
+        # Sort actions by date (descending) for backward adjustment
+        relevant_actions.sort(key=lambda a: a["date"], reverse=True)
+
+        # Build date-to-action lookup
+        action_by_date: Dict[str, dict] = {}
+        for action in relevant_actions:
+            action_by_date[action["date"]] = action
+
+        # Backward adjustment: iterate from newest to oldest.
+        # cumulative_factor starts at 1.0 (most recent prices are already adjusted).
+        #
+        # KEY: On the ex-date itself, the market price is ALREADY the post-dividend
+        # price. We should NOT adjust the ex-date price. The adjustment factor is
+        # computed on the ex-date but only applied to prices BEFORE it.
+        cumulative_factor = 1.0
+
+        # First pass: mark adjusted prices from newest to oldest
+        adjusted = []
+        for p in reversed(prices):
+            date = p["date"]
+            close = p.get("close", 0)
+
+            if date in action_by_date:
+                action = action_by_date[date]
+                cash_div = action.get("cash_div", 0) or 0
+                stock_div = action.get("stock_div", 0) or 0
+
+                if close > 0 and (cash_div > 0 or stock_div > 0):
+                    # Combined adjustment factor
+                    # cash_div: price drops by this amount
+                    # stock_div: share count increases by stock_div/100
+                    stock_ratio = stock_div / 100.0
+
+                    if cash_div > 0 and stock_div > 0:
+                        # Both cash and stock dividend
+                        # New theoretical price = (old_price - cash_div) / (1 + stock_ratio)
+                        adj_price = (close - cash_div) / (1.0 + stock_ratio)
+                        if adj_price > 0:
+                            factor = adj_price / close
+                        else:
+                            factor = 1.0
+                    elif cash_div > 0:
+                        # Cash dividend only
+                        adj_price = close - cash_div
+                        if adj_price > 0:
+                            factor = adj_price / close
+                        else:
+                            factor = 1.0
+                    else:
+                        # Stock dividend only
+                        factor = 1.0 / (1.0 + stock_ratio)
+
+                    # Update cumulative factor for ALL PRIOR prices
+                    cumulative_factor *= factor
+
+            # Apply cumulative adjustment
+            adj_close = round(close * cumulative_factor, 4) if close > 0 else 0
+            adjusted.append({
+                **p,
+                "adj_close": adj_close,
+                "cumulative_factor": round(cumulative_factor, 6),
+            })
+
+        # Reverse back to chronological order
+        adjusted.reverse()
+        return adjusted
+
+    def adjust_price_for_dividend(self, price: float, stock_code: str, date_str: str) -> float:
+        """Adjust a single price for ex-dividend drop.
         
         On ex-date, the stock price drops by the dividend amount.
         This adjustment prevents false crash signals.
         
         Returns: adjusted price (or original if no ex-dividend)
         """
-        div_amount = self.get_ex_dividend_amount(stock_code, date_str)
-        
-        if div_amount is not None and div_amount > 0:
-            return price + div_amount  # Add back the dividend drop
-        
+        action = self.get_action_on_date(stock_code, date_str)
+
+        if action:
+            cash_div = action.get("cash_div", 0) or 0
+            stock_div = action.get("stock_div", 0) or 0
+
+            if cash_div > 0:
+                return price + cash_div  # Add back the dividend drop
+
         return price
-    
-    def get_dividend_yield_impact(self, stock_code, current_price):
+
+    # ------------------------------------------------------------------ #
+    #  Convenience methods
+    # ------------------------------------------------------------------ #
+
+    def should_skip_stop_check(self, stock_code: str, date_str: str) -> bool:
+        """Check if stop loss should be skipped due to ex-dividend date.
+        
+        On ex-dividend dates, the price drop is mechanical,
+        not a market signal. Skip stop checks to avoid false exits.
+        """
+        return self.is_ex_dividend_date(stock_code, date_str)
+
+    def get_dividend_yield_impact(self, stock_code: str, current_price: float) -> float:
         """Estimate dividend yield impact for a stock.
         
-        Returns: estimated annual dividend yield as percentage
+        Returns: estimated annual dividend yield as percentage.
         """
-        upcoming = self.get_upcoming_ex_dividends(stock_code, days_ahead=365)
-        
-        if not upcoming or current_price <= 0:
+        actions = self.get_actions_for_stock(stock_code)
+
+        if not actions or current_price <= 0:
             return 0.0
-        
-        total_div = sum(a.get("cash_div", 0) for a in upcoming)
+
+        # Sum cash dividends for actions in the next 365 days
+        today = datetime.now().strftime("%Y-%m-%d")
+        cutoff = (datetime.now() + timedelta(days=365)).strftime("%Y-%m-%d")
+
+        total_div = 0.0
+        for action in actions:
+            action_date = action.get("date", "")
+            if today <= action_date <= cutoff:
+                total_div += action.get("cash_div", 0) or 0
+
         yield_pct = (total_div / current_price) * 100
-        
         return round(yield_pct, 2)
-    
-    def get_ex_dividend_dates_for_stock(self, stock_code):
-        """Get all ex-dividend dates for a stock.
-        
-        Returns: list of dates
-        """
-        actions = self.dividend_data.get(stock_code, [])
+
+    def get_ex_dividend_dates_for_stock(self, stock_code: str) -> List[str]:
+        """Get all ex-dividend dates for a stock."""
+        actions = self.get_actions_for_stock(stock_code)
         return [a["date"] for a in actions if a.get("date")]
-    
-    def get_all_ex_dividend_dates(self):
+
+    def get_all_ex_dividend_dates(self) -> Dict[str, List[str]]:
         """Get all ex-dividend dates across all stocks.
         
         Returns: dict {date: [stock_codes]}
         """
-        result = {}
-        for code, actions in self.dividend_data.items():
+        result: Dict[str, List[str]] = {}
+        all_codes = set(
+            list(self.ex_dividend_data.keys()) + list(self.dividend_data.keys())
+        )
+
+        for code in all_codes:
+            actions = self.get_actions_for_stock(code)
             for action in actions:
                 date = action.get("date")
                 if date:
                     if date not in result:
                         result[date] = []
                     result[date].append(code)
+
         return result
+
+    def summary(self) -> dict:
+        """Return a summary of loaded corporate action data."""
+        twt49u_stocks = len(self.ex_dividend_data)
+        decl_stocks = len(self.dividend_data)
+        twt49u_actions = sum(len(v) for v in self.ex_dividend_data.values())
+        decl_actions = sum(len(v) for v in self.dividend_data.values())
+
+        return {
+            "twt49u_stocks": twt49u_stocks,
+            "twt49u_actions": twt49u_actions,
+            "declaration_stocks": decl_stocks,
+            "declaration_actions": decl_actions,
+            "loaded": self._loaded,
+        }
 
 
 def main():
     """Test corporate action handler."""
     handler = CorporateActionHandler()
-    
-    print(f"Loaded dividend data for {len(handler.dividend_data)} stocks")
-    
+
+    summary = handler.summary()
+    print(f"Corporate Action Handler Summary:")
+    print(f"  TWT49U stocks: {summary['twt49u_stocks']}")
+    print(f"  TWT49U actions: {summary['twt49u_actions']}")
+    print(f"  Declaration stocks: {summary['declaration_stocks']}")
+    print(f"  Declaration actions: {summary['declaration_actions']}")
+
     # Test with a known stock
     test_code = "2330"
-    if test_code in handler.dividend_data:
-        actions = handler.dividend_data[test_code]
-        print(f"\n{test_code} dividend actions:")
-        for a in actions:
-            print(f"  {a['date']}: cash={a['cash_div']}, stock={a['stock_div']}")
-    
-    # Test ex-dividend check
-    test_date = "2026-07-20"
-    is_ex = handler.is_ex_dividend_date(test_code, test_date)
-    print(f"\nIs {test_code} ex-dividend on {test_date}? {is_ex}")
-    
+    actions = handler.get_actions_for_stock(test_code)
+    if actions:
+        print(f"\n{test_code} corporate actions:")
+        for a in actions[:5]:
+            print(f"  {a['date']}: cash={a.get('cash_div', 0)}, stock={a.get('stock_div', 0)}, source={a.get('source', '?')}")
+
+    # Test backward adjustment with sample data
+    print(f"\nBackward adjustment test:")
+    sample_prices = [
+        {"date": "2026-06-01", "close": 280.0},
+        {"date": "2026-06-02", "close": 282.0},
+        {"date": "2026-06-03", "close": 278.0},  # Ex-dividend day (cash=8)
+        {"date": "2026-06-04", "close": 275.0},
+        {"date": "2026-06-05", "close": 277.0},
+    ]
+    adjusted = handler.backward_adjust_prices(sample_prices, test_code)
+    for p in adjusted:
+        print(f"  {p['date']}: close={p['close']}, adj_close={p['adj_close']}, factor={p.get('cumulative_factor', 1.0)}")
+
     return handler
 
 

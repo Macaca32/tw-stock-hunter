@@ -3,12 +3,17 @@
 Historical Data Fetcher - Pull N days of daily data for momentum calculations
 
 Uses TWSE Open API as primary source, falls back to yfinance when needed.
+Phase 2: Integrates backward price adjustment for corporate actions.
 """
 
 import json
+import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
+
+# Add parent dir for imports
+sys.path.insert(0, str(Path(__file__).parent))
 
 try:
     import yfinance as yf
@@ -17,6 +22,8 @@ try:
 except ImportError:
     YF_AVAILABLE = False
     print("⚠️  yfinance not available - install with: pip install yfinance")
+
+from corporate_actions import CorporateActionHandler
 
 BASE = "https://openapi.twse.com.tw/v1"
 ENDPOINT = "/exchangeReport/STOCK_DAY_ALL"
@@ -180,13 +187,17 @@ def get_trading_dates(start_date, end_date, verbose=False):
     return dates
 
 
-def build_price_history(date_str=None, lookback_days=20, verbose=False):
-    """Build price history for all stocks over lookback period"""
+def build_price_history(date_str=None, lookback_days=365, verbose=False):
+    """Build price history for all stocks over lookback period.
+    
+    Default: 365 days (≈1 full trading year, ~245 trading days).
+    Need at least 240 days for 300-day SMA to be reliable.
+    """
     if date_str is None:
         date_str = datetime.now().strftime("%Y-%m-%d")
     
     end_date = datetime.strptime(date_str, "%Y-%m-%d")
-    start_date = end_date - timedelta(days=lookback_days * 1.5)  # Extra buffer for holidays
+    start_date = end_date - timedelta(days=lookback_days * 1.2)  # Extra buffer for holidays
     
     dates = get_trading_dates(start_date, end_date, verbose)
     
@@ -259,15 +270,39 @@ def build_price_history(date_str=None, lookback_days=20, verbose=False):
                         "high": safe_float(stock.get("HighestPrice", ""), 0),
                         "low": safe_float(stock.get("LowestPrice", ""), 0)
                     })
+
+    # Phase 2: Apply backward adjustment for corporate actions
+    if verbose:
+        print(f"   🔄 Applying backward adjustment for corporate actions...")
     
-    # Save merged history
+    ca_handler = CorporateActionHandler(data_dir=str(data_dir))
+    ca_summary = ca_handler.summary()
+    if verbose:
+        print(f"      Corporate actions loaded: {ca_summary['twt49u_actions']} (TWT49U) + {ca_summary['declaration_actions']} (declarations)")
+    
+    adjusted_prices = {}
+    adjusted_count = 0
+    for code, prices in all_prices.items():
+        adjusted = ca_handler.backward_adjust_prices(prices, code)
+        adjusted_prices[code] = adjusted
+        # Count stocks that actually had adjustments applied
+        if any(p.get("cumulative_factor", 1.0) != 1.0 for p in adjusted):
+            adjusted_count += 1
+    
+    if verbose:
+        print(f"      Adjusted {adjusted_count}/{len(adjusted_prices)} stocks had corporate actions in range")
+    
+    all_prices = adjusted_prices
+    
+    # Save merged history (with backward-adjusted prices)
     history_file = data_dir / "price_history.json"
     with open(history_file, 'w', encoding='utf-8') as f:
         json.dump(all_prices, f, ensure_ascii=False)
     
     if verbose:
         print(f"\n✅ Price history built for {len(all_prices)} stocks")
-        print(f"   Saved to data/price_history.json")
+        print(f"   Saved to data/price_history.json (backward-adjusted)")
+        print(f"   Note: Prices include 'adj_close' field for corporate-action-adjusted prices")
     
     return all_prices
 

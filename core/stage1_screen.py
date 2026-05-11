@@ -113,7 +113,7 @@ def check_hard_filters(stock, company_info, datasets, thresholds, price_history=
             # Calculate average daily VALUE (price × volume), not just volume
             daily_values = []
             for h in history[-20:]:
-                price = h.get("close", 0)
+                price = h.get("adj_close", h.get("close", 0))
                 vol = h.get("volume", 0)
                 if price > 0 and vol > 0:
                     daily_values.append(price * vol)
@@ -127,7 +127,7 @@ def check_hard_filters(stock, company_info, datasets, thresholds, price_history=
             # Fallback: use last 5 days if we don't have 20
             daily_values = []
             for h in history[-5:]:
-                price = h.get("close", 0)
+                price = h.get("adj_close", h.get("close", 0))
                 vol = h.get("volume", 0)
                 if price > 0 and vol > 0:
                     daily_values.append(price * vol)

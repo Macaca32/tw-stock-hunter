@@ -1,7 +1,22 @@
 {
-  "current_phase": 0,
-  "phase_name": "Transaction cost fix (0.3% → 0.6% TWSE / 0.7% TPEx)",
-  "started_at": "2026-05-11T12:44:00+08:00",
-  "completed_phases": [],
-  "notes": "Starting from Phase 0. Data pipeline fix already done manually."
+  "current_phase": 2,
+  "phase_name": "Corporate action backward-adjustment engine",
+  "started_at": "2026-05-11T13:25:00+08:00",
+  "completed_phases": [
+    {
+      "phase": 0,
+      "name": "Transaction cost fix (0.3% → 0.6% TWSE / 0.7% TPEx)",
+      "completed_at": "2026-05-11T13:10:00+08:00",
+      "summary": "Replaced flat 0.3% commission with market-specific round-trip costs. TWSE 0.6%, TPEx 0.7%. Added _is_tpex() and _get_transaction_cost() helpers. Updated all 3 P&L paths. Verified via Z.ai review.",
+      "commit": "9662b54"
+    },
+    {
+      "phase": 1,
+      "name": "Data quality threshold fix (50-day → 240-day min for 300-day SMA)",
+      "completed_at": "2026-05-11T13:25:00+08:00",
+      "summary": "Changed data quality gate from 50-day to 240-day minimum (one full trading year). Below 240 days = low confidence, 240-270 = medium, 270+ = high. Fixed variable naming (min_days_50 → max_history_days).",
+      "commit": "5cfce94"
+    }
+  ],
+  "notes": "Phase 0-1 completed. Phase 1 edit tool errored but changes were correct — committed manually."
 }

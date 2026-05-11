@@ -46,11 +46,16 @@ def load_previous_regime():
         return json.load(f)
 
 
+def get_price(p):
+    """Get price from a price record, preferring backward-adjusted close."""
+    return p.get("adj_close", p.get("close", 0))
+
+
 def calc_sma(prices, period):
     """Calculate Simple Moving Average from price history"""
     if not prices or len(prices) < period:
         return None
-    return sum(p.get("close", 0) for p in prices[-period:]) / period
+    return sum(get_price(p) for p in prices[-period:]) / period
 
 
 def calc_market_breadth(prices, lookback=20):
@@ -67,7 +72,7 @@ def calc_market_breadth(prices, lookback=20):
     for code, history in prices.items():
         if len(history) >= lookback:
             sma = calc_sma(history, lookback)
-            current = history[-1].get("close", 0)
+            current = get_price(history[-1])
             if sma > 0 and current > 0:
                 total += 1
                 if current > sma:
@@ -106,8 +111,8 @@ def calc_volatility(prices, lookback=20, corp_handler=None):
         history = prices[code]
         if len(history) >= 2:
             for i in range(1, len(history)):
-                prev = history[i-1].get("close", 0)
-                curr = history[i].get("close", 0)
+                prev = get_price(history[i-1])
+                curr = get_price(history[i])
                 date_str = history[i].get("date", "")
                 
                 # FIX v3: Skip ex-dividend dates
@@ -187,7 +192,7 @@ def detect_regime_raw(prices, config, corp_handler=None):
     
     for code, _ in top_stocks:
         history = prices[code]
-        current = history[-1].get("close", 0)
+        current = get_price(history[-1])
         
         if current <= 0:
             continue
