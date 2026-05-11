@@ -39,7 +39,8 @@ class PaperTrader:
             "max_holding_days": 20,
             "max_positions": 5,
             "entry_buffer": 0.01,  # 1% buffer for entry
-            "commission_rate": 0.003,  # 0.3% commission
+            "twse_roundtrip_cost": 0.006,  # 0.6% round-trip for TWSE (0.3% tax sell + 0.14% comm × 2)
+            "tpex_roundtrip_cost": 0.007,  # 0.7% round-trip for TPEx (includes wider spreads/slippage on lower-liquidity stocks)
             "gap_risk_buffer_atr_mult": 0.5,  # FIX v3: 0.5x ATR for gap buffer (was flat 1%)
             "max_drawdown_pct": 0.20,  # 20% max drawdown (FIX v3: momentum strategy needs room)
         }
@@ -208,7 +209,7 @@ class PaperTrader:
                 "exit_price": None,
                 "exit_reason": None,
                 "pnl_pct": None,
-                "commission": round(entry_price * self.config["commission_rate"], 2),
+                "commission": round(entry_price * self._get_transaction_cost(code), 2),
                 "combined_score": candidate.get("combined_score", 0),
                 "stage1_score": candidate.get("stage1_score", 0),
                 "stage2_score": candidate.get("stage2_score", 0)
@@ -222,6 +223,36 @@ class PaperTrader:
         
         return new_trades
     
+    def _is_tpex(self, stock_code):
+        """Determine if a stock trades on TPEx (上櫃).
+        
+        TPEx stocks: codes >= 9900, or 6000-6999, or 7000-7999 range.
+        TWSE stocks: 1xxx, 2xxx, 3xxx, 5xxx, 8xxx, etc.
+        
+        Note: 7xxx range added per Z.ai review — many TPEx stocks exist there.
+        9xxx includes 興櫃 stocks but they're filtered out by market cap thresholds.
+        """
+        try:
+            code_int = int(stock_code)
+            return code_int >= 9900 or (6000 <= code_int <= 7999)
+        except (ValueError, TypeError):
+            return False
+
+    def _get_transaction_cost(self, stock_code):
+        """Get round-trip transaction cost based on market (TWSE vs TPEx).
+        
+        TWSE: ~0.6% round-trip (0.3% 證交稅 sell + ~0.14% brokerage comm each way)
+        TPEx: ~0.7% round-trip (same explicit costs + buffer for wider bid-ask spreads
+               and lower liquidity on TPEx-listed stocks)
+        
+        Note: Settlement fees (集保結算所) are included in brokerage commission,
+        not charged separately. Minimum NT$20 commission not modeled (assumes
+        position sizes well above minimum threshold).
+        """
+        if self._is_tpex(stock_code):
+            return self.config.get("tpex_roundtrip_cost", 0.007)
+        return self.config.get("twse_roundtrip_cost", 0.006)
+
     def _get_sector(self, stock_code):
         """Get sector for a stock code.
         
@@ -260,8 +291,9 @@ class PaperTrader:
         
         # Calculate P&L
         gross_pnl = (trade["exit_price"] - trade["entry_price"]) / trade["entry_price"]
-        commission_cost = trade["commission"] / trade["entry_price"]
-        trade["pnl_pct"] = round((gross_pnl - commission_cost) * 100, 2)
+        # Use market-specific round-trip cost (TWSE 0.6% / TPEx 0.7%)
+        roundtrip_cost = self._get_transaction_cost(trade["code"])
+        trade["pnl_pct"] = round((gross_pnl - roundtrip_cost) * 100, 2)
         trade["status"] = "closed"
         trade["exit_date"] = current_date
         trade["holding_days"] = self._calc_holding_days(trade["entry_date"], current_date)
@@ -386,10 +418,10 @@ class PaperTrader:
                             exit_reason = "max_holding_days"
                 
                 if exit_price is not None and exit_price > 0:
-                    # Calculate P&L
+                    # Calculate P&L with market-specific round-trip cost
                     gross_pnl = (exit_price - trade["entry_price"]) / trade["entry_price"]
-                    commission_cost = trade["commission"] / trade["entry_price"]
-                    net_pnl = (gross_pnl - commission_cost) * 100
+                    roundtrip_cost = self._get_transaction_cost(code)
+                    net_pnl = (gross_pnl - roundtrip_cost) * 100
                     
                     trade["exit_price"] = exit_price
                     trade["exit_date"] = exit_date

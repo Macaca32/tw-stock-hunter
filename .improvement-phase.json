@@ -1,0 +1,7 @@
+{
+  "current_phase": 0,
+  "phase_name": "Transaction cost fix (0.3% → 0.6% TWSE / 0.7% TPEx)",
+  "started_at": "2026-05-11T12:44:00+08:00",
+  "completed_phases": [],
+  "notes": "Starting from Phase 0. Data pipeline fix already done manually."
+}

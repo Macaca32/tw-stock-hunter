@@ -14,6 +14,9 @@ from pathlib import Path
 BASE = "https://openapi.twse.com.tw/v1"
 RATE_LIMIT_DELAY = 0.4  # seconds between requests
 TIMEOUT = 15
+MAX_RETRIES = 3  # retries per endpoint
+RETRY_BACKOFF = 2  # exponential backoff multiplier
+BATCH_DELAY = 2.0  # delay between batches of 5 requests (rate limit protection)
 
 # All endpoints to fetch
 ENDPOINTS = {
@@ -50,11 +53,10 @@ def get_last_trading_day():
 
 
 def fetch_endpoint(name, path, params=None, verbose=False):
-    """Fetch a single endpoint with retry logic"""
+    """Fetch a single endpoint with retry logic and exponential backoff"""
     url = f"{BASE}{path}"
-    max_retries = 2
     
-    for attempt in range(max_retries):
+    for attempt in range(MAX_RETRIES):
         try:
             if verbose:
                 print(f"  → {name} ({url})")
@@ -67,7 +69,8 @@ def fetch_endpoint(name, path, params=None, verbose=False):
                     try:
                         data = r.json()
                         if verbose:
-                            print(f"    ✓ {name}: {len(data) if isinstance(data, list) else 'OK'} records")
+                            count = len(data) if isinstance(data, list) else 'OK'
+                            print(f"    ✓ {name}: {count} records")
                         return data
                     except json.JSONDecodeError:
                         if verbose:
@@ -79,13 +82,27 @@ def fetch_endpoint(name, path, params=None, verbose=False):
                         print(f"    ⚠ {name}: Non-JSON response ({content_type})")
                     return []
             else:
-                print(f"    ⚠ {name}: HTTP {r.status_code}")
+                if verbose:
+                    print(f"    ⚠ {name}: HTTP {r.status_code}")
                 return []
+        except requests.exceptions.ConnectionResetError as e:
+            wait = RETRY_BACKOFF ** (attempt + 1)
+            if verbose:
+                print(f"    ✗ {name}: Connection reset (attempt {attempt+1}/{MAX_RETRIES}), retrying in {wait}s...")
+            time.sleep(wait)
+        except requests.exceptions.Timeout as e:
+            wait = RETRY_BACKOFF ** (attempt + 1)
+            if verbose:
+                print(f"    ✗ {name}: Timeout (attempt {attempt+1}/{MAX_RETRIES}), retrying in {wait}s...")
+            time.sleep(wait)
         except Exception as e:
-            print(f"    ✗ {name}: {e} (attempt {attempt+1}/{max_retries})")
-            if attempt < max_retries - 1:
-                time.sleep(1)
+            wait = RETRY_BACKOFF ** (attempt + 1)
+            if verbose:
+                print(f"    ✗ {name}: {e} (attempt {attempt+1}/{MAX_RETRIES}), retrying in {wait}s...")
+            time.sleep(wait)
     
+    if verbose:
+        print(f"    ✗ {name}: All {MAX_RETRIES} retries exhausted")
     return []
 
 
@@ -103,13 +120,20 @@ def fetch_all(date_str=None, verbose=False):
     
     if verbose:
         print(f"📡 Fetching TWSE data for {date_str}")
-        print(f"   Rate limit: {RATE_LIMIT_DELAY}s between requests")
+        print(f"   Rate limit: {RATE_LIMIT_DELAY}s between requests, {BATCH_DELAY}s between batches")
         print()
     
-    # Fetch regular endpoints
-    for name, path in ENDPOINTS.items():
-        results[name] = fetch_endpoint(name, path, verbose=verbose)
-        time.sleep(RATE_LIMIT_DELAY)
+    # Fetch regular endpoints in batches with delays
+    endpoint_list = list(ENDPOINTS.items())
+    batch_size = 5
+    for i in range(0, len(endpoint_list), batch_size):
+        batch = endpoint_list[i:i+batch_size]
+        for name, path in batch:
+            results[name] = fetch_endpoint(name, path, verbose=verbose)
+            time.sleep(RATE_LIMIT_DELAY)
+        # Delay between batches to avoid rate limiting
+        if i + batch_size < len(endpoint_list):
+            time.sleep(BATCH_DELAY)
     
     # Fetch institutional flow with date param
     flow_params = {
@@ -119,12 +143,18 @@ def fetch_all(date_str=None, verbose=False):
     }
     results["flow"] = fetch_endpoint("flow", FLOW_ENDPOINT, params=flow_params, verbose=verbose)
     
+    # Track failed endpoints (empty lists for critical endpoints)
+    critical = ["daily", "pe", "company", "revenue"]
+    for name in critical:
+        if not results.get(name):
+            failed.append(name)
+    
     # Summary
     success_count = len(results) - len(failed)
     if verbose:
         print(f"\n✅ Fetched {success_count}/{len(ENDPOINTS)+1} endpoints")
         if failed:
-            print(f"   Failed: {', '.join(failed)}")
+            print(f"   ⚠ Critical failures: {', '.join(failed)}")
     
     return results
 
@@ -157,17 +187,69 @@ def save_results(results, date_str=None):
     return meta
 
 
+def validate_data(results, verbose=False):
+    """Validate that critical data was fetched successfully"""
+    critical_min = {
+        "daily": 500,      # Should have ~1300+ stocks
+        "pe": 500,         # ~1000+
+        "company": 500,   # ~1000+
+        "revenue": 500,   # ~1000+
+    }
+    
+    issues = []
+    for name, minimum in critical_min.items():
+        data = results.get(name, [])
+        if not data or (isinstance(data, list) and len(data) < minimum):
+            issues.append(f"{name}: expected >={minimum}, got {len(data) if isinstance(data, list) else 0}")
+    
+    if issues:
+        if verbose:
+            print(f"\n❌ Data validation FAILED:")
+            for issue in issues:
+                print(f"   - {issue}")
+            print(f"   → Pipeline should NOT proceed with insufficient data")
+        return False, issues
+    
+    if verbose:
+        print(f"\n✅ Data validation PASSED — all critical endpoints have sufficient data")
+    return True, []
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Fetch TWSE daily data")
     parser.add_argument("--date", type=str, help="Date to fetch (YYYY-MM-DD), defaults to last trading day")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
     parser.add_argument("--dry-run", action="store_true", help="Don't save to disk")
+    parser.add_argument("--validate-only", action="store_true", help="Only validate existing data, don't fetch")
     args = parser.parse_args()
     
     verbose = args.verbose or args.dry_run
     
+    # Validate-only mode: check existing data files
+    if args.validate_only:
+        data_dir = Path(__file__).parent.parent / "data"
+        date_str = args.date or datetime.now().strftime("%Y-%m-%d")
+        
+        results = {}
+        for name in ["daily", "pe", "company", "revenue"]:
+            filepath = data_dir / f"{name}_{date_str}.json"
+            if filepath.exists():
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    results[name] = json.load(f)
+            else:
+                results[name] = []
+        
+        ok, issues = validate_data(results, verbose=True)
+        sys.exit(0 if ok else 1)
+    
     results = fetch_all(date_str=args.date, verbose=verbose)
+    
+    # Validate before saving
+    ok, issues = validate_data(results, verbose=verbose)
+    if not ok:
+        print(f"\n❌ Aborting save — data validation failed")
+        sys.exit(1)
     
     if not args.dry_run:
         meta = save_results(results, date_str=args.date)
