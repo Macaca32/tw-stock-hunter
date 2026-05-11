@@ -226,8 +226,12 @@ class ScoreBreakdown(BaseModel):
 
 
 class Stage1Candidate(BaseModel):
-    """Schema for a Stage 1 screening candidate."""
-    model_config = ConfigDict(populate_by_name=True)
+    """Schema for a Stage 1 screening candidate.
+    
+    Phase 9 R7: extra='forbid' to catch bugs in our own code (Z.ai recommendation).
+    Unknown fields indicate problems upstream, not flexible data sources.
+    """
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
     
     code: str = Field(min_length=1)
     name: str = Field(default="")
@@ -248,7 +252,13 @@ class DeepCheckResult(BaseModel):
 
 
 class Stage2Candidate(BaseModel):
-    """Schema for a Stage 2 candidate output."""
+    """Schema for a Stage 2 candidate output.
+    
+    Phase 9 R7: extra='forbid' to catch bugs in our own code (Z.ai recommendation).
+    Unknown fields indicate problems upstream, not flexible data sources.
+    """
+    model_config = ConfigDict(extra="forbid")
+    
     code: str = Field(min_length=1)
     name: str = Field(default="")
     stage1_score: float = Field(ge=0, le=100)
@@ -381,7 +391,11 @@ def batch_validate(records: list, schema_cls, name: str) -> tuple:
                 print(f"   ⚠ {name} record {code_val}: {type(e).__name__}")
 
     if errors > 0:
-        print(f"⚠ {name}: {errors}/{len(records)} records failed validation")
+        pct_err = (errors / len(records) * 100)
+        if pct_err > 5:
+            print(f"❌ {name}: {errors}/{len(records)} records failed validation ({pct_err:.1f}% — HIGH)")
+        else:
+            print(f"⚠ {name}: {errors}/{len(records)} records failed validation")
 
     return valid, errors
 

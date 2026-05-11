@@ -74,25 +74,33 @@ class HolidayCalendar:
         Uses the most recent holidays_*.json file from fetch_data.py runs.
         Phase 9: Use isTrading field from TWSE API instead of fragile text matching.
         Also handles make-up workdays (補行上班日) where market opens on Saturday,
-        and half-day sessions (僅上午交易).
+        half-day sessions (僅上午交易), and typhoon days (颱風天).
+
+        Cross-year fix: Load ALL holiday files in data_dir, merge by date to catch
+        CNY gaps that span year boundaries (e.g., Dec 31 → Jan 2).
         """
+        # Load ALL holiday files (not just latest) for cross-year coverage
         holiday_files = sorted(self.data_dir.glob("holidays_*.json"))
         if not holiday_files:
             return
 
-        # Use latest file
-        filepath = holiday_files[-1]
-        try:
-            with open(filepath, "r", encoding="utf-8") as f:
-                self._raw_holidays = json.load(f)
-        except (json.JSONDecodeError, IOError):
-            return
+        all_raw: list = []
+        seen_dates: set = set()
+        for filepath in holiday_files:
+            try:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                for entry in data:
+                    roc_date = str(entry.get("Date", ""))
+                    if roc_date not in seen_dates:
+                        all_raw.append(entry)
+                        seen_dates.add(roc_date)
+            except (json.JSONDecodeError, IOError):
+                continue
+
+        self._raw_holidays = all_raw
 
         for entry in self._raw_holidays:
-            roc_date = str(entry.get("Date", ""))
-            iso_date = roc_date_to_iso(roc_date)
-            if not iso_date:
-                continue
 
             name = entry.get("Name", "")
             description = entry.get("Description", "")
@@ -295,9 +303,12 @@ class HolidayCalendar:
 
         Useful for identifying LNY and other extended closures that affect
         moving average calculations.
+        
+        Phase 9 R7: Also returns gap info useful for position sizing —
+        long gaps (>5 days) should trigger reduced position sizes (Z.ai recommendation).
 
         Returns:
-            List of dicts with 'start', 'end', 'length', 'reason'.
+            List of dicts with 'start', 'end', 'length', 'reason', 'risk_level'.
         """
         all_days = self.get_trading_days_in_range(start_date, end_date)
         if not all_days:
@@ -326,13 +337,20 @@ class HolidayCalendar:
                     gap_end = (datetime.strptime(iso, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
                     gap_length = (datetime.strptime(gap_end, "%Y-%m-%d") - datetime.strptime(gap_start, "%Y-%m-%d")).days + 1
                     if gap_length > 2:
-                        # Find the holiday name for this gap
                         reason = self._holiday_names.get(gap_start, "Unknown holiday")
+                        # Phase 9 R7: Risk level for position sizing
+                        if gap_length >= 8:
+                            risk_level = "high"   # LNY-level — reduce positions by 50%
+                        elif gap_length >= 4:
+                            risk_level = "medium" # Reduce positions by 25%
+                        else:
+                            risk_level = "low"
                         gaps.append({
                             "start": gap_start,
                             "end": gap_end,
                             "length": gap_length,
                             "reason": reason,
+                            "risk_level": risk_level,
                         })
                     gap_start = None
 
@@ -343,11 +361,18 @@ class HolidayCalendar:
             gap_end = full_end.strftime("%Y-%m-%d")
             gap_length = (datetime.strptime(gap_end, "%Y-%m-%d") - datetime.strptime(gap_start, "%Y-%m-%d")).days + 1
             reason = self._holiday_names.get(gap_start, "Unknown holiday")
+            if gap_length >= 8:
+                risk_level = "high"
+            elif gap_length >= 4:
+                risk_level = "medium"
+            else:
+                risk_level = "low"
             gaps.append({
                 "start": gap_start,
                 "end": gap_end,
                 "length": gap_length,
                 "reason": reason,
+                "risk_level": risk_level,
             })
 
         return gaps
