@@ -384,7 +384,7 @@ def detect_regime(date_str=None, verbose=False):
         "confidence": confidence,
         "timestamp": datetime.now().isoformat(),
         "stocks_analyzed": len(prices),
-        "max_data_days": min_days_50
+        "max_data_days": max_history_days
     }
     
     if verbose:
@@ -395,7 +395,7 @@ def detect_regime(date_str=None, verbose=False):
         print(f"   Global risk: {global_risk}")
         print(f"   Data quality: {data_quality} (confidence: {confidence})")
         print(f"   Stocks analyzed: {len(prices)}")
-        print(f"   Max data days: {min_days_50}")
+        print(f"   Max data days: {max_history_days}")
     
     return result
 
