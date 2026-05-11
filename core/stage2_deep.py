@@ -12,6 +12,7 @@ from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
 from stage1_screen import load_data, load_config, safe_float, get_field
+import math
 
 
 def load_stage1_results(date_str=None):
@@ -29,50 +30,77 @@ def load_stage1_results(date_str=None):
         return json.load(f)
 
 
+def normalize_stock_id(sid):
+    """Ensure consistent 4-digit string format for Taiwan stock IDs.
+    
+    FIX: Different data sources use different formats:
+    - TWSE API: "2548" (no leading zero)
+    - Some TPEx sources: "06207" (5 digits with leading zero)
+    - This is the #1 cause of silent data mismatches
+    
+    All lookups, saves, and comparisons should use this function.
+    """
+    sid = str(sid).strip()
+    if not sid:
+        return sid
+    try:
+        # Remove leading zeros, then pad to 4 digits
+        return str(int(sid)).zfill(4)
+    except ValueError:
+        # Non-numeric codes (e.g., "00400A") - keep as-is
+        return sid.lstrip("0").ljust(4) if sid.startswith("0") else sid
+
+
 def check_dividend_history(stock_code, dividends_data):
-    """Check dividend consistency and yield (0-100)"""
+    """Check dividend consistency and yield (0-100)
+    
+    FIX: Continuous scoring instead of discrete buckets.
+    Previously only produced 2 unique values across 75 stocks due to
+    coarse ±10/±20 adjustments from a base of 50.
+    """
     stock_divs = []
     for d in dividends_data:
         if get_field(d, "公司代號", "Code", "") == stock_code:
             stock_divs.append(d)
     
     if not stock_divs:
-        return 25, "no_data"
+        return 25.0, "no_data"
     
     try:
-        # Check most recent dividend
         latest = stock_divs[0]
         cash_div = safe_float(get_field(latest, "股東配發-盈餘分配之現金股利(元/股)", "cash_div", ""), 0)
         stock_div = safe_float(get_field(latest, "股東配發-盈餘轉增資配股(元/股)", "stock_div", ""), 0)
-        
-        # Net profit
         net_profit = safe_float(get_field(latest, "本期淨利(淨損)(元)", "net_profit", ""), 0)
         
-        score = 50  # Base
+        score = 50.0  # Base
         
-        # Cash dividend consistency
+        # Cash dividend - continuous scale based on amount (±25 range)
         if cash_div > 0:
-            score += 20
+            # Scale: small div (1-3元) → +10, large div (10+元) → +25
+            score += min(25.0, 10.0 + cash_div * 1.5)
         else:
-            score -= 10
+            score -= 10.0
         
-        # Stock dividend (growth signal)
+        # Stock dividend - continuous scale (±15 range)
         if stock_div > 0:
-            score += 10
+            score += min(15.0, stock_div * 3.0)
         
-        # Profitability
+        # Profitability - continuous scale based on magnitude (±25 range)
         if net_profit > 0:
-            score += 20
+            # Log-scale: larger profit = higher bonus
+            import math
+            profit_bonus = min(25.0, 10.0 + math.log10(max(net_profit, 1)) * 3.0)
+            score += profit_bonus
         else:
-            score -= 20
+            score -= 20.0
         
-        # Multiple dividend records = consistency
-        if len(stock_divs) >= 3:
-            score += 10
+        # Consistency bonus - continuous based on record count (0-10 range)
+        consistency = min(10.0, len(stock_divs) * 3.0)
+        score += consistency
         
-        return max(0, min(100, score)), "ok"
+        return round(max(0.0, min(100.0, score)), 2), "ok"
     except:
-        return 25, "error"
+        return 25.0, "error"
 
 
 def check_announcements(stock_code, announce_data, days_back=30):
@@ -86,28 +114,32 @@ def check_announcements(stock_code, announce_data, days_back=30):
         return 50, "neutral"  # No news is OK
     
     try:
-        score = 50  # Base
+        score = 50.0  # Base
         negative_keywords = ["裁員", "減資", "虧損", "處分", "訴訟", "罰款", "停產", "破產"]
         positive_keywords = ["增資", "獲利", "配股", "配息", "新廠", "簽約", "標案"]
         
+        neg_count = 0
+        pos_count = 0
         for ann in stock_anns[:10]:  # Check last 10
             subject = get_field(ann, "主旨 ", "subject", "")
             desc = get_field(ann, "說明", "description", "")
             text = f"{subject} {desc}"
             
-            # Negative signals
             for kw in negative_keywords:
                 if kw in text:
-                    score -= 10
+                    neg_count += 1
                     break
             
-            # Positive signals
             for kw in positive_keywords:
                 if kw in text:
-                    score += 5
+                    pos_count += 1
                     break
         
-        return max(0, min(100, score)), "ok"
+        # Continuous scale: more negatives = steeper penalty, more positives = bonus
+        score -= neg_count * 8.0  # -8 per negative (was ±10)
+        score += pos_count * 3.5  # +3.5 per positive (was ±5)
+        
+        return round(max(0.0, min(100.0, score)), 2), "ok"
     except:
         return 50, "error"
 
@@ -130,17 +162,15 @@ def check_major_shareholders(stock_code, major_sh_data):
             if sh_name:
                 unique_sh.add(sh_name)
         
-        score = 50  # Base
+        score = 50.0  # Base
         
-        # More unique shareholders = more stable
-        if len(unique_sh) >= 5:
-            score += 20
-        elif len(unique_sh) >= 3:
-            score += 10
-        elif len(unique_sh) < 2:
-            score -= 10
+        # More unique shareholders = more stable (continuous scale)
+        sh_bonus = min(20.0, len(unique_sh) * 4.0)  # +4 per shareholder, max +20
+        score += sh_bonus
+        if len(unique_sh) < 2:
+            score -= 10.0
         
-        return max(0, min(100, score)), "ok"
+        return round(max(0.0, min(100.0, score)), 2), "ok"
     except:
         return 25, "error"
 
@@ -162,15 +192,22 @@ def check_pledge_risk(stock_code, pledge_data):
             pledged = safe_float(get_field(p, "累計質押股數", "total_pledged", ""), 0)
             total_pledged += pledged
         
-        # High pledge = higher risk
-        if total_pledged > 100000000:
-            return 20, "high_pledge"
-        elif total_pledged > 10000000:
-            return 40, "moderate_pledge"
-        elif total_pledged > 0:
-            return 70, "low_pledge"
+        # Continuous scale based on pledge magnitude (log scale)
+        import math
+        if total_pledged > 0:
+            # Log-scale: small pledge ~75, large (>100M) ~20
+            log_pledge = math.log10(total_pledged)
+            score = max(15.0, min(80.0, 90.0 - (log_pledge - 6.0) * 12.0))
+            if score < 40:
+                status = "high_pledge"
+            elif score < 70:
+                status = "moderate_pledge"
+            else:
+                status = "low_pledge"
         else:
-            return 100, "no_pledge"
+            return 100.0, "no_pledge"
+        
+        return round(score, 2), status
     except:
         return 50, "error"
 
@@ -199,12 +236,17 @@ def check_penalty_risk(stock_code, penalty_data):
                 except:
                     pass
         
-        if recent_count >= 3:
-            return 0, "multiple_recent_penalties"
-        elif recent_count >= 1:
-            return 40, "recent_penalty"
+        # Continuous scale based on penalty count
+        if recent_count > 0:
+            score = max(5.0, min(60.0, 100.0 - recent_count * 25.0))
+            if recent_count >= 3:
+                status = "multiple_recent_penalties"
+            else:
+                status = "recent_penalty"
         else:
-            return 80, "old_penalties_only"
+            return round(max(80.0, min(100.0, 100.0 - len(stock_penalties) * 5.0)), 2), "old_penalties_only"
+        
+        return round(score, 2), status
     except:
         return 50, "error"
 

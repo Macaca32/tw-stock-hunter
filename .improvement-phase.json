@@ -61,9 +61,9 @@
     }
   ],
   "notes": "Phase 0-7 done. Phase 8 (integration testing) is the final validation step.",
-  "rounds_completed": 4,
+  "rounds_completed": 5,
   "last_zai_round": {
-    "round": 4,
+    "round": 5,
     "date": "2026-05-11",
     "findings": [
       "stock_div /100 \u2192 /10 (Taiwan \u5143 convention)",
@@ -77,6 +77,6 @@
       "Regime migration fix: old names force immediate transition",
       "Added dividends + major_sh to load_data() optional datasets"
     ],
-    "status": "verified - all 75 candidates now pass Stage 2"
+    "status": "completed - all fixes verified"
   }
 }
