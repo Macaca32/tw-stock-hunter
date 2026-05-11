@@ -509,24 +509,25 @@ class CorporateActionHandler:
         for p in reversed(prices):
             date = p["date"]
             close = p.get("close", 0)
+            volume = p.get("volume", None)
 
+            adj_close = round(close * cumulative_factor, 4) if close > 0 else 0
+            # Volume adjustment: inverse of price factor (more shares → higher raw volume)
+            adj_volume = round(volume / cumulative_factor) if volume is not None and cumulative_factor > 0 else volume
+
+            result = {
+                **p,
+                "adj_close": adj_close,
+                "cumulative_factor": round(cumulative_factor, 6),
+            }
+            if volume is not None:
+                result["adj_volume"] = adj_volume
+
+            adjusted.append(result)
+
+            # Update cumulative factor for ALL PRIOR prices (ex-date factors apply before this point)
             if date in factors_by_date:
-                # Ex-date: use current cumulative_factor (already post-div)
-                adj_close = round(close * cumulative_factor, 4) if close > 0 else 0
-                adjusted.append({
-                    **p,
-                    "adj_close": adj_close,
-                    "cumulative_factor": round(cumulative_factor, 6),
-                })
-                # Update cumulative factor for ALL PRIOR prices
                 cumulative_factor *= factors_by_date[date]
-            else:
-                adj_close = round(close * cumulative_factor, 4) if close > 0 else 0
-                adjusted.append({
-                    **p,
-                    "adj_close": adj_close,
-                    "cumulative_factor": round(cumulative_factor, 6),
-                })
 
         # Reverse back to chronological order
         adjusted.reverse()

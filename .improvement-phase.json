@@ -1,20 +1,20 @@
 {
-  "current_phase": 8,
+  "current_phase": 9,
   "phase_name": "Integration testing + backtest validation",
   "started_at": "2026-05-11T16:50:00+08:00",
   "completed_phases": [
     {
       "phase": 0,
-      "name": "Transaction cost fix (0.3% → 0.6% TWSE / 0.7% TPEx)",
+      "name": "Transaction cost fix (0.3% \u2192 0.6% TWSE / 0.7% TPEx)",
       "completed_at": "2026-05-11T13:10:00+08:00",
       "summary": "Replaced flat 0.3% commission with market-specific round-trip costs. TWSE 0.6%, TPEx 0.7%. Added _is_tpex() and _get_transaction_cost() helpers. Updated all 3 P&L paths. Verified via Z.ai review.",
       "commit": "9662b54"
     },
     {
       "phase": 1,
-      "name": "Data quality threshold fix (50-day → 240-day min for 300-day SMA)",
+      "name": "Data quality threshold fix (50-day \u2192 240-day min for 300-day SMA)",
       "completed_at": "2026-05-11T13:25:00+08:00",
-      "summary": "Changed data quality gate from 50-day to 240-day minimum (one full trading year). Below 240 days = low confidence, 240-270 = medium, 270+ = high. Fixed variable naming (min_days_50 → max_history_days).",
+      "summary": "Changed data quality gate from 50-day to 240-day minimum (one full trading year). Below 240 days = low confidence, 240-270 = medium, 270+ = high. Fixed variable naming (min_days_50 \u2192 max_history_days).",
       "commit": "5cfce94"
     },
     {
@@ -26,7 +26,7 @@
     },
     {
       "phase": 3,
-      "name": "Tiered regime system (NORMAL→CAUTION→STRESS→CRISIS→BLACK_SWAN)",
+      "name": "Tiered regime system (NORMAL\u2192CAUTION\u2192STRESS\u2192CRISIS\u2192BLACK_SWAN)",
       "completed_at": "2026-05-11T16:30:00+08:00",
       "summary": "Replaced 3-regime system with 5-tier system. BLACK_SWAN bypasses 5-day freeze for emergency exits. Position sizing: normal=1.0x, caution=0.6x, stress=0.3x, crisis=0.1x, black_swan=0.0x. Updated regime_rules.json, telegram_alerts.py emoji mapping. Config version bumped to 4.0.",
       "commit": "7b949df"
@@ -60,5 +60,23 @@
       "commit": "7b949df"
     }
   ],
-  "notes": "Phase 0-7 done. Phase 8 (integration testing) is the final validation step."
+  "notes": "Phase 0-7 done. Phase 8 (integration testing) is the final validation step.",
+  "rounds_completed": 4,
+  "last_zai_round": {
+    "round": 4,
+    "date": "2026-05-11",
+    "findings": [
+      "stock_div /100 \u2192 /10 (Taiwan \u5143 convention)",
+      "Ex-date price should not be adjusted (already post-dividend)",
+      "Regime label mismatch: bull vs normal, stale 5-day holdover",
+      "Stage 2 zero candidates due to missing dividends/major_sh data loads"
+    ],
+    "fixes_applied": [
+      "Corporate action backward adjustment engine fixed (/10 divisor)",
+      "Two-pass approach for ex-date factor calc (day-before close)",
+      "Regime migration fix: old names force immediate transition",
+      "Added dividends + major_sh to load_data() optional datasets"
+    ],
+    "status": "verified - all 75 candidates now pass Stage 2"
+  }
 }
