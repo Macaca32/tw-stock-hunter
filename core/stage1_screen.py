@@ -42,8 +42,13 @@ def load_data(date_str=None):
 
 
 def load_config():
-    """Load weights and thresholds"""
+    """Load weights and thresholds.
+    
+    Phase 6: Apply weight smoothing to avoid flash-trade triggers.
+    Limits per-day weight changes to max_weight_change_pct (default 5%).
+    """
     config_dir = Path(__file__).parent.parent / "config"
+    data_dir = Path(__file__).parent.parent / "data"
     
     with open(config_dir / "weights.json", 'r') as f:
         weights = json.load(f)
@@ -51,7 +56,79 @@ def load_config():
     with open(config_dir / "thresholds.json", 'r') as f:
         thresholds = json.load(f)
     
+    # Phase 6: Load previous day's weights for smoothing
+    smoothing_config = weights.get("smoothing", {})
+    max_change = smoothing_config.get("max_weight_change_pct", 0.05)
+    
+    prev_weights_file = data_dir / "weights_previous.json"
+    if prev_weights_file.exists():
+        try:
+            with open(prev_weights_file, 'r') as f:
+                prev = json.load(f)
+            
+            # Smooth stage1 weights
+            if "stage1" in weights and "stage1" in prev:
+                weights["stage1"] = _smooth_weights(
+                    prev["stage1"], weights["stage1"], max_change
+                )
+            
+            # Smooth regime weights
+            if "regime_weights" in weights and "regime_weights" in prev:
+                for regime in weights["regime_weights"]:
+                    if regime in prev["regime_weights"] and weights["regime_weights"][regime] is not None:
+                        weights["regime_weights"][regime] = _smooth_weights(
+                            prev["regime_weights"][regime],
+                            weights["regime_weights"][regime],
+                            max_change
+                        )
+        except (json.JSONDecodeError, IOError):
+            pass
+    
     return weights, thresholds
+
+
+def _smooth_weights(prev_weights, new_weights, max_change):
+    """Smooth weight transition between previous and new weights.
+    
+    Phase 6: Limit per-day weight changes to avoid flash-trade triggers.
+    Sudden weight shifts can cause large score changes that trigger
+    false signals. Smooth transitions give the system time to adapt.
+    
+    Args:
+        prev_weights: Previous day's weight dict
+        new_weights: Target weight dict
+        max_change: Maximum fractional change per weight (0.05 = 5%)
+    
+    Returns:
+        Smoothed weight dict
+    """
+    smoothed = {}
+    
+    for key in new_weights:
+        if key not in prev_weights:
+            smoothed[key] = new_weights[key]
+            continue
+        
+        prev_val = prev_weights[key]
+        new_val = new_weights[key]
+        
+        # Calculate max allowed change
+        change = new_val - prev_val
+        max_allowed = max_change
+        
+        if abs(change) <= max_allowed:
+            smoothed[key] = new_val
+        else:
+            # Clamp change to max allowed
+            direction = 1 if change > 0 else -1
+            smoothed[key] = prev_val + direction * max_allowed
+    
+    # Normalize to sum to 1.0
+    total = sum(smoothed.values())
+    if total > 0:
+        smoothed = {k: v / total for k, v in smoothed.items()}
+    
+    return smoothed
 
 
 def parse_twse_date(date_str):
@@ -781,13 +858,29 @@ def run_stage1(date_str=None, verbose=False):
 
 
 def save_stage1_results(results):
-    """Save Stage 1 results"""
+    """Save Stage 1 results and current weights for smoothing.
+    
+    Phase 6: Save current weights so next run can smooth transitions.
+    """
     data_dir = Path(__file__).parent.parent / "data"
     date = results["date"]
     
     filepath = data_dir / f"stage1_{date}.json"
     with open(filepath, 'w', encoding='utf-8') as f:
         json.dump(results, f, ensure_ascii=False, indent=2)
+    
+    # Phase 6: Save current weights for next-day smoothing
+    try:
+        weights, _ = load_config()
+        weights_file = data_dir / "weights_previous.json"
+        with open(weights_file, 'w', encoding='utf-8') as f:
+            json.dump({
+                "stage1": weights.get("stage1", {}),
+                "regime_weights": weights.get("regime_weights", {}),
+                "saved_at": datetime.now().isoformat(),
+            }, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass  # Don't fail the pipeline if weight save fails
     
     return filepath
 

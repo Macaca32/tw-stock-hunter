@@ -1,7 +1,7 @@
 {
-  "version": "3.0",
-  "updated": "2026-05-10",
-  "notes": "FIX v3: Conditional weights per regime, resolved valuation-momentum conflict",
+  "version": "4.0",
+  "updated": "2026-05-11",
+  "notes": "Phase 6: Conditional weight smoothing to avoid flash-trade triggers",
   "stage1": {
     "revenue_momentum": 0.20,
     "profitability": 0.25,
@@ -19,27 +19,38 @@
     "management": 0.10
   },
   "regime_weights": {
-    "bull_momentum": {
+    "normal": {
       "revenue_momentum": 0.25,
       "profitability": 0.20,
       "valuation": 0.10,
       "institutional_flow": 0.25,
       "technical_momentum": 0.20
     },
-    "choppy_neutral": {
+    "caution": {
       "revenue_momentum": 0.20,
       "profitability": 0.20,
       "valuation": 0.20,
       "institutional_flow": 0.20,
       "technical_momentum": 0.20
     },
-    "bear_defensive": {
+    "stress": {
+      "revenue_momentum": 0.15,
+      "profitability": 0.25,
+      "valuation": 0.25,
+      "institutional_flow": 0.20,
+      "technical_momentum": 0.15
+    },
+    "crisis": {
       "revenue_momentum": 0.10,
       "profitability": 0.25,
       "valuation": 0.30,
       "institutional_flow": 0.20,
       "technical_momentum": 0.15
     },
-    "no_trade": null
+    "black_swan": null
+  },
+  "smoothing": {
+    "max_weight_change_pct": 0.05,
+    "description": "Phase 6: Limit per-day weight changes to 5% to avoid flash-trade triggers"
   }
 }

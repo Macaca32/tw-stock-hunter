@@ -1,7 +1,7 @@
 {
-  "current_phase": 6,
-  "phase_name": "Conditional weight smoothing (avoid flash-trade triggers)",
-  "started_at": "2026-05-11T16:40:00+08:00",
+  "current_phase": 7,
+  "phase_name": "Regime freeze exemption for volatility shocks",
+  "started_at": "2026-05-11T16:45:00+08:00",
   "completed_phases": [
     {
       "phase": 0,
@@ -43,8 +43,15 @@
       "name": "Sector refinement (12-15 sub-sectors + correlation matrix)",
       "completed_at": "2026-05-11T16:40:00+08:00",
       "summary": "Split 'technology' (9 industry codes) into 6 sub-sectors: semiconductor, electronics, optoelectronics, communications, computers, components. Added correlation matrix and sector concentration checks. Max 25% per sector.",
+      "commit": "ae0a921"
+    },
+    {
+      "phase": 6,
+      "name": "Conditional weight smoothing (avoid flash-trade triggers)",
+      "completed_at": "2026-05-11T16:45:00+08:00",
+      "summary": "Added weight smoothing to limit per-day weight changes to 5%. Saves previous day's weights and interpolates on regime transitions. Updated weights.json to v4.0 with new regime names.",
       "commit": "pending"
     }
   ],
-  "notes": "Phase 0-5 done. All pushed to GitHub."
+  "notes": "Phase 0-6 done. All pushed to GitHub."
 }
