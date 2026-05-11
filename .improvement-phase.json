@@ -1,7 +1,7 @@
 {
-  "current_phase": 5,
-  "phase_name": "Sector refinement (12-15 sub-sectors + correlation matrix)",
-  "started_at": "2026-05-11T16:35:00+08:00",
+  "current_phase": 6,
+  "phase_name": "Conditional weight smoothing (avoid flash-trade triggers)",
+  "started_at": "2026-05-11T16:40:00+08:00",
   "completed_phases": [
     {
       "phase": 0,
@@ -36,8 +36,15 @@
       "name": "Survivorship bias Tier 1 (12% return haircut)",
       "completed_at": "2026-05-11T16:35:00+08:00",
       "summary": "Added 12% return haircut and 8% win rate haircut to backtest results to account for delisted stocks not in dataset. Reports both raw and adjusted metrics (avg_pnl_pct_adj, win_rate_adj). Tier 2 (scrape delisted stocks) pending.",
+      "commit": "dddc2a8"
+    },
+    {
+      "phase": 5,
+      "name": "Sector refinement (12-15 sub-sectors + correlation matrix)",
+      "completed_at": "2026-05-11T16:40:00+08:00",
+      "summary": "Split 'technology' (9 industry codes) into 6 sub-sectors: semiconductor, electronics, optoelectronics, communications, computers, components. Added correlation matrix and sector concentration checks. Max 25% per sector.",
       "commit": "pending"
     }
   ],
-  "notes": "Phase 0-4 done. All pushed to GitHub."
+  "notes": "Phase 0-5 done. All pushed to GitHub."
 }

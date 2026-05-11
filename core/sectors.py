@@ -27,28 +27,36 @@ import json
 from pathlib import Path
 
 # TWSE industry code to sector mapping
-# Grouped for position concentration limits
+# Phase 5: Refined 12-15 sub-sectors for better diversification tracking.
+# Previous mapping grouped all tech (22-30) into one bucket = 60% of market.
+# Now split into semiconductors, electronics, communications, etc.
 INDUSTRY_TO_SECTOR = {
-    # Materials
+    # Materials (unchanged)
     "01": "materials", "02": "materials", "03": "materials",
     "04": "materials", "05": "materials", "06": "materials",
-    # Consumer
+    # Consumer (unchanged)
     "07": "consumer", "08": "consumer", "09": "consumer",
     "10": "consumer", "11": "consumer", "12": "consumer",
-    # Industrial
+    # Industrial (unchanged)
     "13": "industrial", "14": "industrial", "15": "industrial",
     "16": "industrial", "17": "industrial", "18": "industrial",
-    # Metals/Heavy
+    # Metals/Heavy (unchanged)
     "19": "metals", "20": "metals", "21": "metals",
-    # Technology (largest group - semiconductors + electronics)
-    "22": "technology", "23": "technology", "24": "technology",
-    "25": "technology", "26": "technology", "27": "technology",
-    "28": "technology", "29": "technology", "30": "technology",
-    # Financial
+    # Technology — Phase 5: Split into 6 sub-sectors
+    "22": "semiconductor",    # 半導體
+    "23": "semiconductor",    # 電子零組件 (mostly semiconductor equipment)
+    "24": "electronics",      # 電機 (electrical equipment)
+    "25": "optoelectronics",  # 光電 (LED, solar, displays)
+    "26": "communications",   # 通訊 (networking, telecom)
+    "27": "computers",        # 電腦 (PC, servers, peripherals)
+    "28": "components",       # 零組件 (passive components)
+    "29": "components",       # 被動元件
+    "30": "components",       # 被動元件 (duplicate code)
+    # Financial (unchanged)
     "31": "financial", "32": "financial", "33": "financial",
-    # Construction
+    # Construction (unchanged)
     "34": "construction", "35": "construction", "36": "construction",
-    # Services
+    # Services (unchanged)
     "37": "services", "38": "services", "39": "services",
     # OTC/TPEx
     "90": "tpex", "91": "tpex", "92": "tpex", "93": "tpex",
@@ -114,6 +122,132 @@ def get_sector_summary(sector_map=None):
     
     from collections import Counter
     return dict(Counter(sector_map.values()).most_common())
+
+
+def calc_sector_correlation(prices, sector_map=None, lookback=60):
+    """Calculate sector correlation matrix.
+    
+    Phase 5: Correlation matrix helps detect when multiple picks
+    are effectively the same bet (e.g., semiconductor + electronics).
+    
+    Args:
+        prices: Dict {code: [{date, close, ...}, ...]}
+        sector_map: Dict {code: sector_name}
+        lookback: Days of returns to use for correlation
+    
+    Returns:
+        Dict {sector_a: {sector_b: correlation}}
+    """
+    if sector_map is None:
+        sector_map = load_sector_mapping()
+    
+    # Calculate sector returns (average of constituent stocks)
+    sector_returns = {}
+    
+    for code, history in prices.items():
+        sector = sector_map.get(code, "other")
+        if len(history) < lookback:
+            continue
+        
+        # Get daily returns
+        returns = []
+        for i in range(1, min(lookback, len(history))):
+            prev = history[i-1].get("adj_close", history[i-1].get("close", 0))
+            curr = history[i].get("adj_close", history[i].get("close", 0))
+            if prev > 0:
+                returns.append((curr - prev) / prev)
+        
+        if not returns:
+            continue
+        
+        if sector not in sector_returns:
+            sector_returns[sector] = []
+        sector_returns[sector].append(returns)
+    
+    # Average returns per sector
+    sector_avg_returns = {}
+    for sector, return_lists in sector_returns.items():
+        if not return_lists:
+            continue
+        # Align by length
+        min_len = min(len(r) for r in return_lists)
+        if min_len < 10:
+            continue
+        avg = [sum(r[:min_len]) / len(r[:min_len]) for r in return_lists]
+        sector_avg_returns[sector] = avg
+    
+    # Calculate correlation matrix
+    sectors = list(sector_avg_returns.keys())
+    matrix = {}
+    
+    for a in sectors:
+        matrix[a] = {}
+        for b in sectors:
+            if a == b:
+                matrix[a][b] = 1.0
+                continue
+            
+            # Pearson correlation
+            ra = sector_avg_returns[a]
+            rb = sector_avg_returns.get(b, [])
+            
+            if not rb or len(ra) < 10 or len(rb) < 10:
+                matrix[a][b] = 0.0
+                continue
+            
+            min_len = min(len(ra), len(rb))
+            mean_a = sum(ra[:min_len]) / min_len
+            mean_b = sum(rb[:min_len]) / min_len
+            
+            cov = sum((ra[i] - mean_a) * (rb[i] - mean_b) for i in range(min_len)) / min_len
+            std_a = sum((x - mean_a) ** 2 for x in ra[:min_len]) ** 0.5 / min_len ** 0.5
+            std_b = sum((x - mean_b) ** 2 for x in rb[:min_len]) ** 0.5 / min_len ** 0.5
+            
+            if std_a > 0 and std_b > 0:
+                matrix[a][b] = round(cov / (std_a * std_b), 3)
+            else:
+                matrix[a][b] = 0.0
+    
+    return matrix
+
+
+def check_sector_concentration(candidates, sector_map=None, max_sector_pct=0.25):
+    """Check if candidates are too concentrated in any single sector.
+    
+    Phase 5: Prevent over-concentration in correlated sectors.
+    
+    Args:
+        candidates: List of candidate dicts with 'code' field
+        sector_map: Dict {code: sector_name}
+        max_sector_pct: Max fraction of candidates from one sector
+    
+    Returns:
+        (ok, details) - ok is bool, details has sector breakdown
+    """
+    if sector_map is None:
+        sector_map = load_sector_mapping()
+    
+    if not candidates:
+        return True, {}
+    
+    from collections import Counter
+    sector_counts = Counter()
+    
+    for cand in candidates:
+        code = cand.get("code", "")
+        sector = sector_map.get(code, "other")
+        sector_counts[sector] += 1
+    
+    total = len(candidates)
+    details = {sector: round(count / total, 2) for sector, count in sector_counts.items()}
+    
+    # Check concentration
+    max_sector = max(sector_counts.values()) if sector_counts else 0
+    max_pct = max_sector / total
+    
+    ok = max_pct <= max_sector_pct
+    
+    return ok, details
 
 
 def main():
