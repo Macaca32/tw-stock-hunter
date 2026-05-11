@@ -89,6 +89,9 @@ def calc_volatility(prices, lookback=20, corp_handler=None):
     
     FIX v3: Skip ex-dividend dates to avoid false volatility spikes.
     Ex-dividend drops are mechanical, not market-driven.
+    Phase 9: Also skip holiday-gap returns (e.g., LNY gaps) that would
+    artificially inflate volatility readings. A gap-day return is NOT a
+    single-day return — it's a multi-day return compressed into one data point.
     """
     if not prices:
         return 0.0
@@ -118,6 +121,22 @@ def calc_volatility(prices, lookback=20, corp_handler=None):
                 # FIX v3: Skip ex-dividend dates
                 if corp_handler and corp_handler.is_ex_dividend_date(code, date_str):
                     continue
+                
+                # Phase 9: Skip holiday-gap returns
+                # If the gap between consecutive entries spans multiple weekdays,
+                # this is a holiday gap return, not a single-day return.
+                prev_date_str = history[i-1].get("date", "")
+                if prev_date_str and date_str:
+                    try:
+                        curr_dt = datetime.strptime(date_str, "%Y-%m-%d")
+                        prev_dt = datetime.strptime(prev_date_str, "%Y-%m-%d")
+                        day_diff = (curr_dt - prev_dt).days
+                        # If more than 2 calendar days apart, it's a holiday gap
+                        # (1 day = normal, 2 days includes weekend)
+                        if day_diff > 3:
+                            continue
+                    except ValueError:
+                        pass
                 
                 if prev > 0:
                     all_returns.append((curr - prev) / prev)

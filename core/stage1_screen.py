@@ -722,6 +722,60 @@ def _score_momentum_single_day(stock_code, daily_data):
         return 25
 
 
+def _validate_candidates(candidates, verbose=True):
+    """Phase 9: Validate Stage 1 candidates via Pydantic schema.
+    
+    Catches missing fields (e.g., close=0), wrong types, and score out-of-range
+    before downstream modules receive corrupted data. Soft filter — invalid
+    records are excluded with a warning but don't block the pipeline.
+    """
+    if not candidates:
+        return []
+    
+    try:
+        from core.schemas import Stage1Candidate, ScoreBreakdown
+    except ImportError as e:
+        if verbose:
+            print(f"⚠ Pydantic schemas unavailable for validation: {e}")
+        return candidates  # Return raw data without validation
+    
+    valid = []
+    invalid_count = 0
+    
+    for c in candidates:
+        try:
+            # Build ScoreBreakdown from score_breakdown dict
+            sb = c.get("score_breakdown", {})
+            breakdown = ScoreBreakdown(
+                revenue=float(sb.get("revenue", 25)),
+                profitability=float(sb.get("profitability", 25)),
+                valuation=float(sb.get("valuation", 25)),
+                flow=float(sb.get("flow", 25)),
+                momentum=float(sb.get("momentum", 25)),
+            )
+            
+            # Validate the full candidate
+            validated = Stage1Candidate(
+                code=str(c["code"]),
+                name=c.get("name", ""),
+                close=float(c["close"]),
+                composite_score=float(c["composite_score"]),
+                score_breakdown=breakdown,
+                passed=bool(c.get("pass", c["composite_score"] >= 65)),
+            )
+            valid.append(validated.model_dump())
+        except Exception as e:
+            invalid_count += 1
+            if verbose and invalid_count <= 3:  # Log first few, not all
+                code = c.get("code", "??")
+                print(f"   ⚠ Candidate validation failed for {code}: {e}")
+    
+    if verbose:
+        print(f"📋 Stage 1 output validated: {len(valid)}/{len(candidates)} valid ({invalid_count} excluded)")
+    
+    return valid
+
+
 def run_stage1(date_str=None, verbose=False):
     """Run Stage 1 screening"""
     datasets, date = load_data(date_str)
@@ -828,11 +882,14 @@ def run_stage1(date_str=None, verbose=False):
     candidates.sort(key=lambda x: x["composite_score"], reverse=True)
     watchlist.sort(key=lambda x: x["composite_score"], reverse=True)
     
+    # Phase 9: Validate output via Pydantic schema
+    valid_candidates = _validate_candidates(candidates, verbose=verbose)
+    
     output = {
         "stage": 1,
         "date": date,
         "timestamp": datetime.now().isoformat(),
-        "candidates": candidates,
+        "candidates": valid_candidates,
         "watchlist": watchlist,
         "rejected_count": len(rejected),
         "summary": {
@@ -845,13 +902,13 @@ def run_stage1(date_str=None, verbose=False):
     
     if verbose:
         print(f"📊 Results:")
-        print(f"   Passed: {len(candidates)}")
+        print(f"   Passed: {len(valid_candidates)}")
         print(f"   Watchlist: {len(watchlist)}")
         print(f"   Rejected: {len(rejected)}")
         print()
-        if candidates:
+        if valid_candidates:
             print(f"   Top 5 candidates:")
-            for c in candidates[:5]:
+            for c in valid_candidates[:5]:
                 print(f"      {c['code']} {c['name']}: {c['composite_score']}")
     
     return output

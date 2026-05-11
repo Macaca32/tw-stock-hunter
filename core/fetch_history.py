@@ -24,6 +24,7 @@ except ImportError:
     print("⚠️  yfinance not available - install with: pip install yfinance")
 
 from corporate_actions import CorporateActionHandler
+from holiday_calendar import HolidayCalendar, get_holiday_gaps as _get_holiday_gaps_fn, is_trading_day as _is_trading_day_fn
 
 BASE = "https://openapi.twse.com.tw/v1"
 ENDPOINT = "/exchangeReport/STOCK_DAY_ALL"
@@ -174,16 +175,38 @@ def fetch_from_yfinance(stock_codes, dates, output_dir=None, verbose=False):
 
 
 def get_trading_dates(start_date, end_date, verbose=False):
-    """Get list of trading dates (skip weekends, approximate)"""
-    dates = []
-    current = start_date
-    
-    while current <= end_date:
-        # Skip weekends
-        if current.weekday() < 5:
-            dates.append(current.strftime("%Y-%m-%d"))
-        current += timedelta(days=1)
-    
+    """Get list of trading dates (skip weekends AND holidays).
+
+    Survivorship Bias Tier 2: Uses TWSE holiday calendar to avoid phantom
+    trading days. Without this, SMA windows count LNY gaps as missing data,
+    inflating volatility and distorting momentum signals.
+    """
+    start_iso = start_date.strftime("%Y-%m-%d")
+    end_iso = end_date.strftime("%Y-%m-%d")
+
+    try:
+        from pathlib import Path
+        data_dir = str(Path(__file__).parent.parent / "data")
+        cal = HolidayCalendar(data_dir)
+        dates = cal.get_trading_days_in_range(start_iso, end_iso)
+
+        # Show holiday gaps for awareness
+        gaps = cal.get_holiday_gaps(start_iso, end_iso)
+        if gaps and verbose:
+            print(f"   📅 Holiday gaps detected: {len(gaps)}")
+            for g in gaps:
+                print(f"      {g['start']} → {g['end']} ({g['length']} days): {g.get('reason', '?')}")
+    except Exception as e:
+        if verbose:
+            print(f"   ⚠ Holiday calendar unavailable ({e}), using weekend-only filter")
+        # Fallback to weekend-only filter
+        dates = []
+        current = start_date
+        while current <= end_date:
+            if current.weekday() < 5:
+                dates.append(current.strftime("%Y-%m-%d"))
+            current += timedelta(days=1)
+
     return dates
 
 

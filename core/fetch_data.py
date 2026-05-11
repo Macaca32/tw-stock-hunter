@@ -11,6 +11,9 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
+# Ensure parent dir is on path for intra-core imports (e.g., core.schemas)
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 BASE = "https://openapi.twse.com.tw/v1"
 RATE_LIMIT_DELAY = 0.4  # seconds between requests
 TIMEOUT = 15
@@ -187,6 +190,102 @@ def save_results(results, date_str=None):
     return meta
 
 
+def validate_ingested_data(results, verbose=True):
+    """Phase 9: Pydantic validation at ingestion boundary.
+    
+    Validates fetched data against schemas before saving to disk.
+    Catches field mismatches and type errors early rather than silently corrupting downstream.
+    
+    Strategy: Soft filter — log warnings for failures but don't abort pipeline,
+    since some records may be legitimately edge cases (new listings, suspended stocks).
+    Aborts only if critical datasets have >10% validation failure rate.
+    """
+    # Import schemas lazily to avoid hard dependency on pydantic
+    try:
+        from core.schemas import (
+            DailyStockRecord, PERatioRecord, CompanyInfo,
+            RevenueRecord, CorporateAction, HolidayEntry,
+            batch_validate, validate_daily_stock, normalize_keys,
+            _safe_parse_float,
+        )
+    except ImportError as e:
+        if verbose:
+            print(f"⚠ Pydantic schemas unavailable: {e}")
+            return True  # Don't block pipeline
+    
+    all_ok = True
+    total_validated = 0
+    total_errors = 0
+    
+    # Validate daily stock data (most critical)
+    daily_data = results.get("daily", [])
+    if isinstance(daily_data, list) and len(daily_data) > 0:
+        valid_count = 0
+        error_count = 0
+        for raw in daily_data:
+            normalized = normalize_keys(raw) if isinstance(raw, dict) else raw
+            record = validate_daily_stock(normalized)
+            if record is not None:
+                valid_count += 1
+            else:
+                error_count += 1
+        total_validated += len(daily_data)
+        total_errors += error_count
+        if verbose:
+            pct_err = (error_count / len(daily_data) * 100) if daily_data else 0
+            print(f"\n📋 Validation: daily → {valid_count}/{len(daily_data)} valid ({pct_err:.1f}% errors)")
+        # Hard gate for critical data
+        if pct_err > 10:
+            all_ok = False
+            print(f"❌ CRITICAL: Daily data has >10% validation failures! Pipeline should not proceed.")
+    
+    # Validate PE ratio data
+    pe_data = results.get("pe", [])
+    if isinstance(pe_data, list) and len(pe_data) > 0:
+        valid_list, err_count = batch_validate(pe_data, PERatioRecord, "PE ratios")
+        total_validated += len(pe_data)
+        total_errors += err_count
+        if verbose and err_count > 0:
+            print(f"📋 Validation: PE → {len(valid_list)}/{len(pe_data)} valid ({err_count} errors)")
+    
+    # Validate company info
+    company_data = results.get("company", [])
+    if isinstance(company_data, list) and len(company_data) > 0:
+        valid_list, err_count = batch_validate(company_data, CompanyInfo, "Company info")
+        total_validated += len(company_data)
+        total_errors += err_count
+        if verbose and err_count > 0:
+            print(f"📋 Validation: company → {len(valid_list)}/{len(company_data)} valid ({err_count} errors)")
+    
+    # Validate revenue data
+    revenue_data = results.get("revenue", [])
+    if isinstance(revenue_data, list) and len(revenue_data) > 0:
+        valid_list, err_count = batch_validate(revenue_data, RevenueRecord, "Revenue")
+        total_validated += len(revenue_data)
+        total_errors += err_count
+        if verbose and err_count > 0:
+            print(f"📋 Validation: revenue → {len(valid_list)}/{len(revenue_data)} valid ({err_count} errors)")
+    
+    # Validate holidays data
+    holiday_data = results.get("holidays", [])
+    if isinstance(holiday_data, list) and len(holiday_data) > 0:
+        valid_list, err_count = batch_validate(holiday_data, HolidayEntry, "Holidays")
+        total_validated += len(holiday_data)
+        total_errors += err_count
+        if verbose and err_count > 0:
+            print(f"📋 Validation: holidays → {len(valid_list)}/{len(holiday_data)} valid ({err_count} errors)")
+    
+    # Summary
+    if verbose:
+        if total_validated > 0:
+            overall_pct = (total_errors / total_validated * 100) if total_validated else 0
+            print(f"\n✅ Total validated: {total_validated} records, {total_errors} errors ({overall_pct:.1f}%)")
+        else:
+            print("⚠ No data to validate")
+    
+    return all_ok
+
+
 def validate_data(results, verbose=False):
     """Validate that critical data was fetched successfully"""
     critical_min = {
@@ -245,7 +344,13 @@ def main():
     
     results = fetch_all(date_str=args.date, verbose=verbose)
     
-    # Validate before saving
+    # Phase 9: Pydantic validation at ingestion boundary
+    validate_ingested_ok = validate_ingested_data(results, verbose=verbose)
+    if not validate_ingested_ok:
+        print(f"\n❌ Aborting save — data quality too low (>10% validation failures)")
+        sys.exit(1)
+    
+    # Validate before saving (record count check)
     ok, issues = validate_data(results, verbose=verbose)
     if not ok:
         print(f"\n❌ Aborting save — data validation failed")

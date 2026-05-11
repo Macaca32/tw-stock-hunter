@@ -1,6 +1,6 @@
 {
   "current_phase": 9,
-  "phase_name": "Integration testing + backtest validation",
+  "phase_name": "Survivorship Bias Tier 2: Holiday calendar, Pydantic schema enforcement",
   "started_at": "2026-05-11T16:50:00+08:00",
   "completed_phases": [
     {
