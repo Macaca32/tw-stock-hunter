@@ -1,7 +1,7 @@
 {
-  "current_phase": 9,
-  "phase_name": "Survivorship Bias Tier 2: Holiday calendar, Pydantic schema enforcement",
-  "started_at": "2026-05-11T16:50:00+08:00",
+  "current_phase": 10,
+  "phase_name": "Holiday-aware position sizing + post-holiday volatility spike detection",
+  "started_at": "2026-05-12T05:50:00+08:00",
   "completed_phases": [
     {
       "phase": 0,
@@ -58,10 +58,24 @@
       "completed_at": "2026-05-11T16:50:00+08:00",
       "summary": "Already implemented in Phase 3. BLACK_SWAN regime bypasses 5-day min duration, allowing immediate emergency exits during extreme volatility events.",
       "commit": "7b949df"
+    },
+    {
+      "phase": 8,
+      "name": "Integration testing",
+      "completed_at": "2026-05-11T16:50:00+08:00",
+      "summary": "Final validation step for Phases 0-7.",
+      "commit": "3133b4e"
+    },
+    {
+      "phase": 9,
+      "name": "Survivorship Bias Tier 2: Holiday calendar, Pydantic schema enforcement",
+      "completed_at": "2026-05-12T05:50:00+08:00",
+      "summary": "Full holiday calendar with cross-year loading, half-day sessions, make-up workdays. Pydantic schemas for all data types with extra='forbid' on internal schemas. Validation at ingestion boundary reduced errors from 44.5% → 0.2%. Fixed critical batch_validate() bug (normalize_keys broke aliases) and RevenueRecord schema mismatch.",
+      "commit": "e37097a"
     }
   ],
-  "notes": "Phase 0-7 done. Phase 8 (integration testing) is the final validation step.",
-  "rounds_completed": 6,
+  "notes": "Phase 0-9 done. Phase 10: Holiday-aware position sizing + post-holiday volatility spike detection.",
+  "rounds_completed": 7,
   "last_zai_round": {
     "round": 6,
     "date": "2026-05-11",
