@@ -270,6 +270,13 @@ def apply_transition_logic(raw_regime, prev_regime_data, config):
     """
     min_duration = config.get("min_regime_duration_days", 5)
     
+    # FIX: Old regime names (bull/choppy/bear/no_trade) are incompatible with
+    # the tiered system (normal/caution/stress/crisis/black_swan).
+    # Force transition to raw regime if prev regime uses old naming.
+    old_regime_names = {"bull", "choppy", "bear", "no_trade", "unknown"}
+    if prev_regime_data is not None and prev_regime_data.get("regime", "") in old_regime_names:
+        return raw_regime, 1
+    
     if prev_regime_data is None:
         return raw_regime, 1
     

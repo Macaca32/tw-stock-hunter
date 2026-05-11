@@ -32,7 +32,7 @@ def load_data(date_str=None):
             print(f"⚠ Missing {name}_{date_str}.json")
     
     # Optional datasets
-    for name in ["margin", "announce", "pledge", "sanctions", "halts", "margin_susp"]:
+    for name in ["margin", "announce", "pledge", "sanctions", "halts", "margin_susp", "dividends", "major_sh"]:
         filepath = data_dir / f"{name}_{date_str}.json"
         if filepath.exists():
             with open(filepath, 'r', encoding='utf-8') as f:
