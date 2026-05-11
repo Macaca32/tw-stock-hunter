@@ -396,8 +396,9 @@ class CorporateActionHandler:
     def get_stock_dividend_ratio(self, stock_code: str, date_str: str) -> Optional[float]:
         """Get the stock dividend ratio for a stock on a given date.
         
-        Stock dividend of 3 means 3 new shares per 100 shares held,
-        i.e., a 3% increase in share count.
+        Stock dividend in 元 (face value). 1元 = 0.1 shares per share
+        (since Taiwan face value is 10 TWD). So stock_div of 3 means
+        3/10 = 0.3 shares per share (30% increase in share count).
         """
         action = self.get_action_on_date(stock_code, date_str)
         if action:
@@ -424,12 +425,13 @@ class CorporateActionHandler:
             All prices before ex-date are multiplied by this factor.
         
         For stock dividends (配股):
-            If stock_div = 3 (3 shares per 100), the adjustment factor is:
-            adjustment_factor = 100 / (100 + stock_div) = 100/103
+            Taiwan convention: stock_div is in 元 (face value), face value = 10 TWD.
+            If stock_div = 3 (3元), that means 3/10 = 0.3 shares per share.
+            adjustment_factor = 1 / (1 + stock_div/10)
             All prices before ex-date are multiplied by this factor.
         
         Combined (cash + stock dividend):
-            adjustment_factor = (price_before_ex - cash_div) / (price_before_ex * (1 + stock_div/100))
+            adjustment_factor = (price_before_ex - cash_div) / (price_before_ex * (1 + stock_div/10))
         
         Args:
             prices: List of price dicts with 'date' and 'close' keys, sorted by date.
@@ -474,52 +476,57 @@ class CorporateActionHandler:
         # computed on the ex-date but only applied to prices BEFORE it.
         cumulative_factor = 1.0
 
-        # First pass: mark adjusted prices from newest to oldest
+        # Two-pass approach:
+        # Pass 1: compute adjustment factors for each ex-date using day-before close
+        # Pass 2: apply cumulative factors to all prices
+        factors_by_date: Dict[str, float] = {}
+        for i in range(1, len(prices)):  # i = ex-date index
+            if prices[i]["date"] in action_by_date:
+                action = action_by_date[prices[i]["date"]]
+                cash_div = action.get("cash_div", 0) or 0
+                stock_div = action.get("stock_div", 0) or 0
+                day_before_close = prices[i - 1].get("close", 0)
+
+                if day_before_close > 0 and (cash_div > 0 or stock_div > 0):
+                    # Taiwan convention: stock_div is in 元 (face value)
+                    # 1元 = 0.1 shares per share (face value = 10 TWD)
+                    stock_ratio = stock_div / 10.0
+
+                    if cash_div > 0 and stock_div > 0:
+                        adj_price = (day_before_close - cash_div) / (1.0 + stock_ratio)
+                        factor = adj_price / day_before_close if adj_price > 0 else 1.0
+                    elif cash_div > 0:
+                        adj_price = day_before_close - cash_div
+                        factor = adj_price / day_before_close if adj_price > 0 else 1.0
+                    else:
+                        factor = 1.0 / (1.0 + stock_ratio)
+
+                    factors_by_date[prices[i]["date"]] = factor
+
+        # Pass 2: apply cumulative adjustment from newest to oldest
+        cumulative_factor = 1.0
         adjusted = []
         for p in reversed(prices):
             date = p["date"]
             close = p.get("close", 0)
 
-            if date in action_by_date:
-                action = action_by_date[date]
-                cash_div = action.get("cash_div", 0) or 0
-                stock_div = action.get("stock_div", 0) or 0
-
-                if close > 0 and (cash_div > 0 or stock_div > 0):
-                    # Combined adjustment factor
-                    # cash_div: price drops by this amount
-                    # stock_div: share count increases by stock_div/100
-                    stock_ratio = stock_div / 100.0
-
-                    if cash_div > 0 and stock_div > 0:
-                        # Both cash and stock dividend
-                        # New theoretical price = (old_price - cash_div) / (1 + stock_ratio)
-                        adj_price = (close - cash_div) / (1.0 + stock_ratio)
-                        if adj_price > 0:
-                            factor = adj_price / close
-                        else:
-                            factor = 1.0
-                    elif cash_div > 0:
-                        # Cash dividend only
-                        adj_price = close - cash_div
-                        if adj_price > 0:
-                            factor = adj_price / close
-                        else:
-                            factor = 1.0
-                    else:
-                        # Stock dividend only
-                        factor = 1.0 / (1.0 + stock_ratio)
-
-                    # Update cumulative factor for ALL PRIOR prices
-                    cumulative_factor *= factor
-
-            # Apply cumulative adjustment
-            adj_close = round(close * cumulative_factor, 4) if close > 0 else 0
-            adjusted.append({
-                **p,
-                "adj_close": adj_close,
-                "cumulative_factor": round(cumulative_factor, 6),
-            })
+            if date in factors_by_date:
+                # Ex-date: use current cumulative_factor (already post-div)
+                adj_close = round(close * cumulative_factor, 4) if close > 0 else 0
+                adjusted.append({
+                    **p,
+                    "adj_close": adj_close,
+                    "cumulative_factor": round(cumulative_factor, 6),
+                })
+                # Update cumulative factor for ALL PRIOR prices
+                cumulative_factor *= factors_by_date[date]
+            else:
+                adj_close = round(close * cumulative_factor, 4) if close > 0 else 0
+                adjusted.append({
+                    **p,
+                    "adj_close": adj_close,
+                    "cumulative_factor": round(cumulative_factor, 6),
+                })
 
         # Reverse back to chronological order
         adjusted.reverse()
