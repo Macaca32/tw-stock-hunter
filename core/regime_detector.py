@@ -303,13 +303,15 @@ def detect_regime(date_str=None, verbose=False):
             "confidence": "low"
         }
     
-    # Check data quality: need sufficient history
-    min_days_50 = 0
+    # Check data quality: need sufficient history for 300-day SMA
+    # Taiwan has ~245 trading days/year; 240 ≈ one full trading year
+    # Below this threshold, the 300-day SMA has too few data points to be reliable
+    max_history_days = 0
     min_days_150 = 0
     min_days_300 = 0
     
     for code, history in prices.items():
-        min_days_50 = max(min_days_50, len(history))
+        max_history_days = max(max_history_days, len(history))
         if len(history) >= 150:
             min_days_150 += 1
         if len(history) >= 300:
@@ -318,10 +320,10 @@ def detect_regime(date_str=None, verbose=False):
     data_quality = "OK"
     confidence = "high"
     
-    if min_days_50 < 50:
-        data_quality = "INSUFFICIENT_50D"
+    if max_history_days < 240:
+        data_quality = "INSUFFICIENT_300D"
         confidence = "low"
-    elif min_days_50 < 100:
+    elif max_history_days < 270:
         confidence = "medium"
     
     # Load previous regime for transition logic
