@@ -164,11 +164,20 @@ class PaperTrader:
         for candidate in candidates[:self.config["max_positions"]]:
             code = candidate["code"]
             name = candidate["name"]
+            
+            # Get entry price: prefer candidate's close, fallback to price history
             entry_price = candidate.get("close", 0)
             
-            # Use candidate's close price directly
-            if entry_price == 0:
-                entry_price = candidate.get("composite_score", 0)  # Fallback to score if no price
+            # FIX: Stage 2 candidates may not have 'close' field
+            # Look up from price history if missing
+            if entry_price == 0 and code in price_history:
+                for day in price_history[code]:
+                    if day.get("date") == date_str:
+                        entry_price = day.get("adj_close", day.get("close", 0))
+                        break
+                # If date not found, use latest available
+                if entry_price == 0 and price_history[code]:
+                    entry_price = price_history[code][-1].get("adj_close", price_history[code][-1].get("close", 0))
             
             if entry_price == 0:
                 continue
@@ -364,11 +373,22 @@ class PaperTrader:
                     history = prices[code]
                     entry_idx = None
                     
-                    # Find entry date in history
+                    # Find entry date in history (or nearest prior trading day)
                     for i, day in enumerate(history):
                         if day["date"] == date_str:
                             entry_idx = i
                             break
+                    
+                    # FIX: If exact date not found (holiday/weekend), use nearest prior day
+                    if entry_idx is None:
+                        # Find the LAST day before or on the entry date
+                        best_idx = None
+                        for i, day in enumerate(history):
+                            if day["date"] <= date_str:
+                                best_idx = i
+                            else:
+                                break
+                        entry_idx = best_idx
                     
                     if entry_idx is not None:
                         # Scan forward for exit
