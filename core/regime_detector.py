@@ -165,6 +165,7 @@ def assess_global_risk(prices, corp_handler=None):
 def detect_regime_raw(prices, config, corp_handler=None):
     """Detect raw regime signal without transition logic.
     
+    Phase 3: Tiered regime system (NORMAL→CAUTION→STRESS→CRISIS→BLACK_SWAN).
     Uses 50/150/300-day SMAs for proper cycle coverage.
     Returns: raw regime string
     """
@@ -221,38 +222,50 @@ def detect_regime_raw(prices, config, corp_handler=None):
     ratio_300 = above_300 / total if total > 0 else 0.5
     
     vol = calc_volatility(prices)
-    global_risk = assess_global_risk(prices)
+    global_risk = assess_global_risk(prices, corp_handler=corp_handler)
+    breadth = calc_market_breadth(prices, lookback=20)
     
-    # === NO_TRADE REGIME ===
-    # FIX v3: Mandatory no-trade state
-    if global_risk == "extreme" and ratio_50 < 0.3:
-        return "no_trade"
-    if vol > 0.035 and ratio_50 < 0.35:
-        return "no_trade"
+    # === PHASE 3: TIERED REGIME SYSTEM ===
+    # BLACK_SWAN: extreme conditions, immediate action required
+    if breadth < 0.20 and vol > 0.04:
+        return "black_swan"
+    if vol > 0.05:  # Single-day panic
+        return "black_swan"
     
-    # Bull regime: above all SMAs
+    # CRISIS: severe deterioration
+    if global_risk == "extreme" and ratio_50 < 0.25:
+        return "crisis"
+    if breadth < 0.25 and vol > 0.03:
+        return "crisis"
+    if ratio_50 < 0.25 and ratio_150 < 0.30:
+        return "crisis"
+    
+    # STRESS: elevated risk but not yet crisis
+    if ratio_50 < 0.35 and ratio_150 < 0.40:
+        return "stress"
+    if global_risk == "high" and ratio_50 < 0.45:
+        return "stress"
+    if vol > 0.030 and ratio_50 < 0.45:
+        return "stress"
+    
+    # CAUTION: mixed signals, reduced positions
+    if ratio_50 < 0.50:
+        return "caution"
+    if vol > 0.022 and ratio_50 < 0.55:
+        return "caution"
+    
+    # NORMAL: healthy market conditions
     if ratio_50 > 0.6 and ratio_150 > 0.5:
-        if vol > 0.025:
-            return "volatile_bull"
-        return "bull"
+        return "normal"
     
-    # Bear regime: below all SMAs
-    if ratio_50 < 0.4 and ratio_150 < 0.45:
-        if vol > 0.025:
-            return "volatile_bear"
-        return "bear"
-    
-    # Mixed signals
-    if ratio_50 > 0.5:
-        return "cautious_bull"
-    else:
-        return "cautious_bear"
+    # Default to caution for borderline cases
+    return "caution"
 
 
 def apply_transition_logic(raw_regime, prev_regime_data, config):
     """Apply transition logic with minimum duration and hysteresis.
     
-    FIX v3: Prevent rapid oscillation between regimes.
+    Phase 3: BLACK_SWAN bypasses min duration for immediate exits.
     Minimum 5 trading days per regime before allowing state change.
     """
     min_duration = config.get("min_regime_duration_days", 5)
@@ -262,6 +275,10 @@ def apply_transition_logic(raw_regime, prev_regime_data, config):
     
     prev_regime = prev_regime_data.get("regime", "unknown")
     days_in_regime = prev_regime_data.get("days_in_regime", 1)
+    
+    # Phase 3: BLACK_SWAN override - bypass duration requirement
+    if raw_regime == "black_swan":
+        return raw_regime, 1
     
     # If we haven't been in the current regime long enough, stay
     if days_in_regime < min_duration:
@@ -384,7 +401,15 @@ def detect_regime(date_str=None, verbose=False):
 
 
 def get_regime_weights(regime):
-    """Get adjusted weights based on regime."""
+    """Get adjusted weights based on regime.
+    
+    Phase 3: Tiered regime system.
+    - NORMAL: full position, momentum weights
+    - CAUTION: reduced position, mixed weights
+    - STRESS: small position, defensive weights
+    - CRISIS: minimal position, cash-heavy
+    - BLACK_SWAN: zero new positions, emergency exits
+    """
     config_file = Path(__file__).parent.parent / "config" / "weights.json"
     
     if config_file.exists():
@@ -393,12 +418,15 @@ def get_regime_weights(regime):
         
         regime_config = config.get("regime_weights", {})
         
-        if regime in ("bull", "volatile_bull", "cautious_bull"):
+        # Phase 3: Map tiered regimes to weight configs
+        if regime == "normal":
             return regime_config.get("bull_momentum", {})
-        elif regime in ("bear", "volatile_bear", "cautious_bear"):
+        elif regime == "caution":
+            return regime_config.get("choppy_neutral", {})
+        elif regime in ("stress", "crisis"):
             return regime_config.get("bear_defensive", {})
-        elif regime == "no_trade":
-            # NO_TRADE: don't generate any signals
+        elif regime == "black_swan":
+            # BLACK_SWAN: don't generate any signals
             return None
         else:
             return regime_config.get("choppy_neutral", {})
@@ -407,26 +435,24 @@ def get_regime_weights(regime):
 
 
 def get_regime_position_mult(regime):
-    """Get position size multiplier based on regime."""
-    if regime == "no_trade":
-        return 0.0  # No new positions
+    """Get position size multiplier based on regime.
     
-    config_file = Path(__file__).parent.parent / "config" / "regime_rules.json"
-    
-    if config_file.exists():
-        with open(config_file, 'r') as f:
-            config = json.load(f)
-        
-        regimes = config.get("regimes", {})
-        
-        if regime in ("bull", "volatile_bull", "cautious_bull"):
-            return regimes.get("bull_momentum", {}).get("adjustments", {}).get("position_size_mult", 1.0)
-        elif regime in ("bear", "volatile_bear", "cautious_bear"):
-            return regimes.get("bear_defensive", {}).get("adjustments", {}).get("position_size_mult", 0.4)
-        else:
-            return regimes.get("choppy_neutral", {}).get("adjustments", {}).get("position_size_mult", 0.6)
-    
-    return 0.6
+    Phase 3: Tiered position sizing.
+    - NORMAL: 1.0x (full size)
+    - CAUTION: 0.6x (reduced)
+    - STRESS: 0.3x (small)
+    - CRISIS: 0.1x (minimal)
+    - BLACK_SWAN: 0.0x (no new positions)
+    """
+    # Phase 3: Direct mapping, no config lookup needed
+    mult_map = {
+        "normal": 1.0,
+        "caution": 0.6,
+        "stress": 0.3,
+        "crisis": 0.1,
+        "black_swan": 0.0,
+    }
+    return mult_map.get(regime, 0.6)
 
 
 def main():

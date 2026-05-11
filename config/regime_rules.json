@@ -1,64 +1,42 @@
 {
-  "version": "3.0",
-  "updated": "2026-05-10",
-  "notes": "FIX v3: 50/150/300-day SMAs, NO_TRADE regime, min 5-day duration, transition logic",
+  "version": "4.0",
+  "updated": "2026-05-11",
+  "notes": "Phase 3: Tiered regime system (NORMAL→CAUTION→STRESS→CRISIS→BLACK_SWAN)",
   "regimes": {
-    "bull_momentum": {
-      "description": "Strong uptrend, high volume, foreign buying",
-      "conditions": {
-        "taiex_above_150ma": true,
-        "taiex_50ma_above_150ma": true,
-        "foreign_net_buying_5d": true,
-        "advance_decline_ratio": "> 1.2"
-      },
-      "adjustments": {
-        "position_size_mult": 1.0,
-        "entry_threshold": 70,
-        "stop_loss_pct": 0.03,
-        "take_profit_pct": 0.06
-      }
+    "normal": {
+      "description": "Healthy market, full position sizing",
+      "position_size_mult": 1.0,
+      "entry_threshold": 70,
+      "stop_loss_pct": 0.03,
+      "take_profit_pct": 0.06
     },
-    "choppy_neutral": {
-      "description": "Sideways market, low conviction",
-      "conditions": {
-        "taiex_50ma_flat": true,
-        "volume_below_avg": true,
-        "advance_decline_ratio": "0.8-1.2"
-      },
-      "adjustments": {
-        "position_size_mult": 0.6,
-        "entry_threshold": 75,
-        "stop_loss_pct": 0.025,
-        "take_profit_pct": 0.05
-      }
+    "caution": {
+      "description": "Mixed signals, reduced positions",
+      "position_size_mult": 0.6,
+      "entry_threshold": 75,
+      "stop_loss_pct": 0.025,
+      "take_profit_pct": 0.05
     },
-    "bear_defensive": {
-      "description": "Downtrend, risk-off",
-      "conditions": {
-        "taiex_below_150ma": true,
-        "foreign_net_selling_5d": true,
-        "advance_decline_ratio": "< 0.8"
-      },
-      "adjustments": {
-        "position_size_mult": 0.4,
-        "entry_threshold": 80,
-        "stop_loss_pct": 0.02,
-        "take_profit_pct": 0.04
-      }
+    "stress": {
+      "description": "Elevated risk, small positions",
+      "position_size_mult": 0.3,
+      "entry_threshold": 80,
+      "stop_loss_pct": 0.02,
+      "take_profit_pct": 0.04
     },
-    "no_trade": {
-      "description": "Extreme risk conditions - no new positions",
-      "conditions": {
-        "global_risk": "extreme",
-        "breadth_below": 0.25,
-        "volatility_above": 0.035
-      },
-      "adjustments": {
-        "position_size_mult": 0.0,
-        "entry_threshold": 999,
-        "stop_loss_pct": 0.02,
-        "take_profit_pct": 0.02
-      }
+    "crisis": {
+      "description": "Severe deterioration, minimal exposure",
+      "position_size_mult": 0.1,
+      "entry_threshold": 90,
+      "stop_loss_pct": 0.015,
+      "take_profit_pct": 0.03
+    },
+    "black_swan": {
+      "description": "Extreme conditions - no new positions, emergency exits allowed",
+      "position_size_mult": 0.0,
+      "entry_threshold": 999,
+      "stop_loss_pct": 0.01,
+      "take_profit_pct": 0.02
     }
   },
   "detection": {
@@ -73,6 +51,11 @@
       "start_day": 15,
       "end_month": 8,
       "end_day": 31
+    },
+    "black_swan_override": {
+      "description": "BLACK_SWAN bypasses min_regime_duration for immediate exits",
+      "bypass_duration": true,
+      "immediate_exit": true
     }
   }
 }

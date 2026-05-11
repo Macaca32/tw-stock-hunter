@@ -81,11 +81,11 @@ class TelegramAlerts:
         volatility = regime_data.get("volatility", 0)
         
         emoji = {
-            "bull": "🐂",
-            "volatile_bull": "🐂⚡",
-            "choppy": "📊",
-            "bear": "🐻",
-            "volatile_bear": "🐻⚡",
+            "normal": "🐂",
+            "caution": "📊",
+            "stress": "⚠️",
+            "crisis": "🐻",
+            "black_swan": "🚨",
             "unknown": "❓"
         }
         

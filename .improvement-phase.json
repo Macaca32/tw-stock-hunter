@@ -1,7 +1,7 @@
 {
-  "current_phase": 2,
-  "phase_name": "Corporate action backward-adjustment engine",
-  "started_at": "2026-05-11T13:25:00+08:00",
+  "current_phase": 4,
+  "phase_name": "Survivorship bias Tier 1 (12% return haircut) + Tier 2 (scrape delisted stocks)",
+  "started_at": "2026-05-11T16:30:00+08:00",
   "completed_phases": [
     {
       "phase": 0,
@@ -16,7 +16,21 @@
       "completed_at": "2026-05-11T13:25:00+08:00",
       "summary": "Changed data quality gate from 50-day to 240-day minimum (one full trading year). Below 240 days = low confidence, 240-270 = medium, 270+ = high. Fixed variable naming (min_days_50 → max_history_days).",
       "commit": "5cfce94"
+    },
+    {
+      "phase": 2,
+      "name": "Corporate action backward-adjustment engine",
+      "completed_at": "2026-05-11T16:20:00+08:00",
+      "summary": "Full backward-adjustment engine. 401 stocks with corporate action data. Adjustment formula: (close - cash_div) / (1 + stock_div/100). All historical OHLCV adjusted backward from ex-date. Downstream modules (regime_detector, stage1_screen) now use adj_close. Price history lookback increased to 365 days. ROC date conversion helpers.",
+      "commit": "40ee7dd"
+    },
+    {
+      "phase": 3,
+      "name": "Tiered regime system (NORMAL→CAUTION→STRESS→CRISIS→BLACK_SWAN)",
+      "completed_at": "2026-05-11T16:30:00+08:00",
+      "summary": "Replaced 3-regime system with 5-tier system. BLACK_SWAN bypasses 5-day freeze for emergency exits. Position sizing: normal=1.0x, caution=0.6x, stress=0.3x, crisis=0.1x, black_swan=0.0x. Updated regime_rules.json, telegram_alerts.py emoji mapping. Config version bumped to 4.0.",
+      "commit": "pending"
     }
   ],
-  "notes": "Phase 0-1 completed. Phase 1 edit tool errored but changes were correct — committed manually."
+  "notes": "Phase 0-3 done. Phase 3 committed but not pushed yet."
 }
