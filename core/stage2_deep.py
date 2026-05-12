@@ -103,8 +103,8 @@ def check_dividend_history(stock_code, dividends_data):
         
         return round(max(0.0, min(100.0, score)), 2), "ok"
     except Exception as e:
-        logger.warning("[Stage2] check_dividend_history failed for %s: %r", stock_code, e)
-        return 25.0, "error"
+        logger.debug("[Stage2] check_dividend_history failed for %s: %r", stock_code, e)
+        return None
 
 
 def check_announcements(stock_code, announce_data, days_back=30):
@@ -145,8 +145,8 @@ def check_announcements(stock_code, announce_data, days_back=30):
         
         return round(max(0.0, min(100.0, score)), 2), "ok"
     except Exception as e:
-        logger.warning("[Stage2] check_announcements failed for %s: %r", stock_code, e)
-        return 50, "error"
+        logger.debug("[Stage2] check_announcements failed for %s: %r", stock_code, e)
+        return None
 
 
 def check_major_shareholders(stock_code, major_sh_data):
@@ -177,8 +177,8 @@ def check_major_shareholders(stock_code, major_sh_data):
         
         return round(max(0.0, min(100.0, score)), 2), "ok"
     except Exception as e:
-        logger.warning("[Stage2] check_major_shareholders failed for %s: %r", stock_code, e)
-        return 25, "error"
+        logger.debug("[Stage2] check_major_shareholders failed for %s: %r", stock_code, e)
+        return None
 
 
 def check_pledge_risk(stock_code, pledge_data):
@@ -215,8 +215,8 @@ def check_pledge_risk(stock_code, pledge_data):
         
         return round(score, 2), status
     except Exception as e:
-        logger.warning("[Stage2] check_pledge_risk failed for %s: %r", stock_code, e)
-        return 50, "error"
+        logger.debug("[Stage2] check_pledge_risk failed for %s: %r", stock_code, e)
+        return None
 
 
 def check_penalty_risk(stock_code, penalty_data):
@@ -240,8 +240,8 @@ def check_penalty_risk(stock_code, penalty_data):
                     penalty_date = datetime.strptime(str(date_str)[:8], "%Y%m%d")
                     if (datetime.now() - penalty_date).days < 365:
                         recent_count += 1
-                except ValueError:
-                    # Unparseable date format — skip this entry silently
+                except (ValueError, AttributeError):
+                    # Unparseable date format or None — skip this entry silently
                     pass
         
         # Continuous scale based on penalty count
@@ -256,8 +256,8 @@ def check_penalty_risk(stock_code, penalty_data):
         
         return round(score, 2), status
     except Exception as e:
-        logger.warning("[Stage2] check_penalty_risk failed for %s: %r", stock_code, e)
-        return 50, "error"
+        logger.debug("[Stage2] check_penalty_risk failed for %s: %r", stock_code, e)
+        return None
 
 
 def validate_stage1_candidates(candidates, verbose=False):
@@ -375,23 +375,40 @@ def run_stage2(date_str=None, verbose=False):
         stage1_score = float(cs_raw)
         
         # Run deep checks
-        div_score, div_status = check_dividend_history(code, dividends_data)
-        ann_score, ann_status = check_announcements(code, announce_data)
-        sh_score, sh_status = check_major_shareholders(code, major_sh_data)
-        pledge_score, pledge_status = check_pledge_risk(code, pledge_data)
-        penalty_score, penalty_status = check_penalty_risk(code, penalty_data)
+        div_result = check_dividend_history(code, dividends_data)
+        ann_result = check_announcements(code, announce_data)
+        sh_result = check_major_shareholders(code, major_sh_data)
+        pledge_result = check_pledge_risk(code, pledge_data)
+        penalty_result = check_penalty_risk(code, penalty_data)
+        
+        # Phase 12 R2: Handle None returns from checks (missing data → skip gracefully)
+        div_score, div_status = (div_result if div_result is not None else (None, "error"))
+        ann_score, ann_status = (ann_result if ann_result is not None else (None, "error"))
+        sh_score, sh_status = (sh_result if sh_result is not None else (None, "error"))
+        pledge_score, pledge_status = (pledge_result if pledge_result is not None else (None, "error"))
+        penalty_score, penalty_status = (penalty_result if penalty_result is not None else (None, "error"))
         
         # Phase 12: Collect diagnostics
         if div_status == "error":
             diagnostics["check_errors"]["dividend"] += 1
+        elif div_score is not None:
+            diagnostics["score_distributions"]["dividend"].append(div_score)
         if ann_status == "error":
             diagnostics["check_errors"]["announcements"] += 1
+        elif ann_score is not None:
+            diagnostics["score_distributions"]["announcements"].append(ann_score)
         if sh_status == "error":
             diagnostics["check_errors"]["shareholders"] += 1
+        elif sh_score is not None:
+            diagnostics["score_distributions"]["shareholders"].append(sh_score)
         if pledge_status == "error":
             diagnostics["check_errors"]["pledge"] += 1
+        elif pledge_score is not None:
+            diagnostics["score_distributions"]["pledge"].append(pledge_score)
         if penalty_status == "error":
             diagnostics["check_errors"]["penalties"] += 1
+        elif penalty_score is not None:
+            diagnostics["score_distributions"]["penalties"].append(penalty_score)
         
         # === RED FLAG DISQUALIFICATION ===
         # FIX v2: Actually enforce red flags
@@ -459,9 +476,9 @@ def run_stage2(date_str=None, verbose=False):
         if fundamental_score >= thresholds["stage2"]["fundamental_score_min"]:
             deep_results.append(result)
     
-    # Phase 12: Compute score distribution stats
+    # Phase 12: Compute score distribution stats from collected distributions
     for check_name in diagnostics["score_distributions"]:
-        scores = [r["checks"][check_name]["score"] for r in deep_results + disqualified if check_name in r.get("checks", {})]
+        scores = diagnostics["score_distributions"][check_name]
         if scores:
             diagnostics["score_stats"][check_name] = {
                 "min": round(min(scores), 1),
