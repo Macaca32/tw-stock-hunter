@@ -251,6 +251,64 @@ def check_penalty_risk(stock_code, penalty_data):
         return 50, "error"
 
 
+def validate_stage1_candidates(candidates, verbose=False):
+    """Phase 11: Validate Stage 1 candidates using Pydantic schema before Stage 2 processing.
+
+    Catches missing fields, wrong types, out-of-range scores, and field name mismatches
+    between Stage 1 output and Stage 2 expectations. Invalid candidates are excluded with
+    a warning but don't block the pipeline.
+    """
+    if not candidates:
+        return []
+
+    try:
+        from core.schemas import Stage1Candidate, ScoreBreakdown
+    except ImportError as e:
+        if verbose:
+            print(f"⚠ Pydantic schemas unavailable for inter-stage validation: {e}")
+        return candidates  # Return raw data without validation
+
+    valid = []
+    invalid_count = 0
+
+    for i, c in enumerate(candidates):
+        try:
+            code = str(c.get("code", ""))
+            if not code:
+                raise ValueError(f"Missing 'code' field")
+
+            # Build ScoreBreakdown from score_breakdown dict
+            sb = c.get("score_breakdown", {})
+            breakdown = ScoreBreakdown(
+                revenue=float(sb.get("revenue", 25)),
+                profitability=float(sb.get("profitability", 25)),
+                valuation=float(sb.get("valuation", 25)),
+                flow=float(sb.get("flow", 25)),
+                momentum=float(sb.get("momentum", 25)),
+            )
+
+            # Validate the full candidate via Pydantic schema (extra='forbid' catches bugs)
+            validated = Stage1Candidate(
+                code=code,
+                name=str(c.get("name", "")),
+                close=float(c["close"]),
+                composite_score=float(c["composite_score"]),
+                score_breakdown=breakdown,
+                passed=bool(c.get("pass", c["composite_score"] >= 65)),
+            )
+            valid.append(validated.model_dump())
+        except Exception as e:
+            invalid_count += 1
+            if verbose and invalid_count <= 3:
+                code = str(c.get("code", f"#{i}"))
+                print(f"   ⚠ Stage→Stage2 validation failed for {code}: {e}")
+
+    if verbose:
+        print(f"📋 Inter-stage validation: {len(valid)}/{len(candidates)} valid ({invalid_count} excluded)")
+
+    return valid
+
+
 def run_stage2(date_str=None, verbose=False):
     """Run Stage 2 deep-dive on Stage 1 candidates
     
@@ -271,6 +329,11 @@ def run_stage2(date_str=None, verbose=False):
     penalty_data = datasets.get("penalties", [])
     
     candidates = stage1_results.get("candidates", [])
+    # Phase 11: Inter-stage validation — catch field mismatches early
+    raw_candidates = list(candidates)
+    candidates = validate_stage1_candidates(candidates, verbose=verbose)
+    if verbose and len(candidates) != len(raw_candidates):
+        print(f"   Filtered {len(raw_candidates)} Stage 1 candidates → {len(candidates)} valid")
     
     if verbose:
         print(f"🔬 Stage 2: Deep-diving {len(candidates)} candidates")
@@ -282,9 +345,11 @@ def run_stage2(date_str=None, verbose=False):
     disqualified = []
     
     for candidate in candidates:
-        code = candidate["code"]
-        name = candidate["name"]
-        stage1_score = candidate["composite_score"]
+        code = str(candidate.get("code", ""))
+        if not code:
+            continue
+        name = str(candidate.get("name", ""))
+        stage1_score = float(candidate.get("composite_score", 0))
         
         # Run deep checks
         div_score, div_status = check_dividend_history(code, dividends_data)
