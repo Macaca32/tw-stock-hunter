@@ -1,7 +1,7 @@
 {
-  "current_phase": 12,
-  "phase_name": "Stage 2 error handling + scoring diagnostics",
-  "started_at": "2026-05-13T02:00:00+08:00",
+  "current_phase": 13,
+  "phase_name": "Corporate action backfill (2020-2025) + volume adjustment",
+  "started_at": null,
   "completed_phases": [
     {
       "phase": 0,
@@ -97,9 +97,17 @@
         "Verified code vs stock_id field name \u2014 no mismatch in practice"
       ],
       "status": "completed - R1 applied, Z.ai response truncated but critical items addressed"
+    },
+    {
+      "phase": 12,
+      "name": "Stage 2 error handling + scoring diagnostics",
+      "started_at": "2026-05-13T02:00:00+08:00",
+      "completed_at": null,
+      "summary": "Replaced all 6 bare except: clauses in stage2_deep.py with structured error handling. Added scoring diagnostics (error counts per check, score distribution stats). Z.ai R2 fixes: return values → None instead of defaults to avoid fake signal bug, logging level changed .warning() → .debug() for scale, inner except narrowing added AttributeError alongside ValueError.",
+      "commit": "36f8c09"
     }
   ],
-  "notes": "Phase 0-11 done. Phase 12 implemented & committed.",
+  "notes": "Phase 0-12 done. Phase 13: corporate action backfill + volume adjustment (Z.ai critical priorities).",
   "rounds_completed": 8,
   "last_zai_round": {
     "round": 6,

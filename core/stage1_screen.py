@@ -191,7 +191,7 @@ def check_hard_filters(stock, company_info, datasets, thresholds, price_history=
             daily_values = []
             for h in history[-20:]:
                 price = h.get("adj_close", h.get("close", 0))
-                vol = h.get("volume", 0)
+                vol = h.get("adj_volume", h.get("volume", 0))
                 if price > 0 and vol > 0:
                     daily_values.append(price * vol)
             if daily_values:
@@ -205,7 +205,7 @@ def check_hard_filters(stock, company_info, datasets, thresholds, price_history=
             daily_values = []
             for h in history[-5:]:
                 price = h.get("adj_close", h.get("close", 0))
-                vol = h.get("volume", 0)
+                vol = h.get("adj_volume", h.get("volume", 0))
                 if price > 0 and vol > 0:
                     daily_values.append(price * vol)
             if daily_values:

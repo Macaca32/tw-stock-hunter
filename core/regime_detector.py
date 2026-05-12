@@ -101,7 +101,7 @@ def calc_volatility(prices, lookback=20, corp_handler=None):
     for code, history in prices.items():
         if len(history) >= 20:
             recent = history[-20:]
-            avg_vol = sum(h.get("volume", 0) for h in recent) / len(recent)
+            avg_vol = sum(h.get("adj_volume", h.get("volume", 0)) for h in recent) / len(recent)
             stock_avg_vol[code] = avg_vol
     
     top_stocks = sorted(stock_avg_vol.items(), key=lambda x: x[1], reverse=True)[:20]
@@ -196,7 +196,7 @@ def detect_regime_raw(prices, config, corp_handler=None):
     for code, history in prices.items():
         if len(history) >= 20:
             recent = history[-20:]
-            avg_vol = sum(h.get("volume", 0) for h in recent) / len(recent)
+            avg_vol = sum(h.get("adj_volume", h.get("volume", 0)) for h in recent) / len(recent)
             stock_avg_vol[code] = avg_vol
     
     top_stocks = sorted(stock_avg_vol.items(), key=lambda x: x[1], reverse=True)[:20]
