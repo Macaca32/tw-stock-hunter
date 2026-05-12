@@ -5,6 +5,7 @@ Analyzes Stage 1 candidates with detailed fundamental checks
 """
 
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 
@@ -13,6 +14,8 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent))
 from stage1_screen import load_data, load_config, safe_float, get_field
 import math
+
+logger = logging.getLogger(__name__)
 
 
 def load_stage1_results(date_str=None):
@@ -99,7 +102,8 @@ def check_dividend_history(stock_code, dividends_data):
         score += consistency
         
         return round(max(0.0, min(100.0, score)), 2), "ok"
-    except:
+    except Exception as e:
+        logger.warning("[Stage2] check_dividend_history failed for %s: %r", stock_code, e)
         return 25.0, "error"
 
 
@@ -140,7 +144,8 @@ def check_announcements(stock_code, announce_data, days_back=30):
         score += pos_count * 3.5  # +3.5 per positive (was ±5)
         
         return round(max(0.0, min(100.0, score)), 2), "ok"
-    except:
+    except Exception as e:
+        logger.warning("[Stage2] check_announcements failed for %s: %r", stock_code, e)
         return 50, "error"
 
 
@@ -171,7 +176,8 @@ def check_major_shareholders(stock_code, major_sh_data):
             score -= 10.0
         
         return round(max(0.0, min(100.0, score)), 2), "ok"
-    except:
+    except Exception as e:
+        logger.warning("[Stage2] check_major_shareholders failed for %s: %r", stock_code, e)
         return 25, "error"
 
 
@@ -208,7 +214,8 @@ def check_pledge_risk(stock_code, pledge_data):
             return 100.0, "no_pledge"
         
         return round(score, 2), status
-    except:
+    except Exception as e:
+        logger.warning("[Stage2] check_pledge_risk failed for %s: %r", stock_code, e)
         return 50, "error"
 
 
@@ -233,7 +240,8 @@ def check_penalty_risk(stock_code, penalty_data):
                     penalty_date = datetime.strptime(str(date_str)[:8], "%Y%m%d")
                     if (datetime.now() - penalty_date).days < 365:
                         recent_count += 1
-                except:
+                except ValueError:
+                    # Unparseable date format — skip this entry silently
                     pass
         
         # Continuous scale based on penalty count
@@ -247,7 +255,8 @@ def check_penalty_risk(stock_code, penalty_data):
             return round(max(80.0, min(100.0, 100.0 - len(stock_penalties) * 5.0)), 2), "old_penalties_only"
         
         return round(score, 2), status
-    except:
+    except Exception as e:
+        logger.warning("[Stage2] check_penalty_risk failed for %s: %r", stock_code, e)
         return 50, "error"
 
 
@@ -346,6 +355,14 @@ def run_stage2(date_str=None, verbose=False):
     deep_results = []
     disqualified = []
     
+    # Phase 12: Scoring diagnostics — track error rates and score distributions
+    diagnostics = {
+        "total_candidates": len(candidates),
+        "check_errors": {"dividend": 0, "announcements": 0, "shareholders": 0, "pledge": 0, "penalties": 0},
+        "score_distributions": {"dividend": [], "announcements": [], "shareholders": [], "pledge": [], "penalties": []},
+        "score_stats": {},
+    }
+    
     for candidate in candidates:
         code = str(candidate.get("code", ""))
         if not code:
@@ -363,6 +380,18 @@ def run_stage2(date_str=None, verbose=False):
         sh_score, sh_status = check_major_shareholders(code, major_sh_data)
         pledge_score, pledge_status = check_pledge_risk(code, pledge_data)
         penalty_score, penalty_status = check_penalty_risk(code, penalty_data)
+        
+        # Phase 12: Collect diagnostics
+        if div_status == "error":
+            diagnostics["check_errors"]["dividend"] += 1
+        if ann_status == "error":
+            diagnostics["check_errors"]["announcements"] += 1
+        if sh_status == "error":
+            diagnostics["check_errors"]["shareholders"] += 1
+        if pledge_status == "error":
+            diagnostics["check_errors"]["pledge"] += 1
+        if penalty_status == "error":
+            diagnostics["check_errors"]["penalties"] += 1
         
         # === RED FLAG DISQUALIFICATION ===
         # FIX v2: Actually enforce red flags
@@ -430,6 +459,19 @@ def run_stage2(date_str=None, verbose=False):
         if fundamental_score >= thresholds["stage2"]["fundamental_score_min"]:
             deep_results.append(result)
     
+    # Phase 12: Compute score distribution stats
+    for check_name in diagnostics["score_distributions"]:
+        scores = [r["checks"][check_name]["score"] for r in deep_results + disqualified if check_name in r.get("checks", {})]
+        if scores:
+            diagnostics["score_stats"][check_name] = {
+                "min": round(min(scores), 1),
+                "max": round(max(scores), 1),
+                "mean": round(sum(scores) / len(scores), 1),
+                "count": len(scores),
+            }
+        else:
+            diagnostics["score_stats"][check_name] = {"min": None, "max": None, "mean": None, "count": 0}
+    
     # Sort by combined score
     deep_results.sort(key=lambda x: x["combined_score"], reverse=True)
     
@@ -443,13 +485,28 @@ def run_stage2(date_str=None, verbose=False):
             "stage1_candidates": len(candidates),
             "passed_stage2": len(deep_results),
             "disqualified": len(disqualified)
-        }
+        },
+        "diagnostics": diagnostics  # Phase 12
     }
     
     if verbose:
         print(f"📊 Stage 2 Results:")
         print(f"   Passed: {len(deep_results)}")
         print(f"   Disqualified: {len(disqualified)}")
+        
+        # Phase 12: Print error summary
+        total_errors = sum(diagnostics["check_errors"].values())
+        if total_errors > 0:
+            print(f"   ⚠ Check errors: {total_errors}/{diagnostics['total_candidates']} candidates")
+            for check, count in diagnostics["check_errors"].items():
+                if count > 0:
+                    print(f"      - {check}: {count} errors")
+        
+        # Phase 12: Print score stats
+        print(f"   Score ranges (passed candidates):")
+        for check, stats in diagnostics.get("score_stats", {}).items():
+            if stats["count"] > 0:
+                print(f"      {check}: {stats['min']}-{stats['max']} (mean={stats['mean']})")
         print()
         if deep_results:
             print(f"   Top 5 after deep-dive:")

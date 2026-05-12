@@ -1,7 +1,7 @@
 {
   "current_phase": 12,
-  "phase_name": "TBD \u2014 Next iteration phase",
-  "started_at": "2026-05-13T00:00:00+08:00",
+  "phase_name": "Stage 2 error handling + scoring diagnostics",
+  "started_at": "2026-05-13T02:00:00+08:00",
   "completed_phases": [
     {
       "phase": 0,
