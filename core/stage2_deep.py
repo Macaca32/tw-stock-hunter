@@ -279,12 +279,14 @@ def validate_stage1_candidates(candidates, verbose=False):
 
             # Build ScoreBreakdown from score_breakdown dict
             sb = c.get("score_breakdown", {})
+            # Phase 11 R2: Require all sub-scores — no defaults that mask missing data.
+            # Missing data scored as "mediocre" is worse than failing validation.
             breakdown = ScoreBreakdown(
-                revenue=float(sb.get("revenue", 25)),
-                profitability=float(sb.get("profitability", 25)),
-                valuation=float(sb.get("valuation", 25)),
-                flow=float(sb.get("flow", 25)),
-                momentum=float(sb.get("momentum", 25)),
+                revenue=float(sb["revenue"]),
+                profitability=float(sb["profitability"]),
+                valuation=float(sb["valuation"]),
+                flow=float(sb["flow"]),
+                momentum=float(sb["momentum"]),
             )
 
             # Validate the full candidate via Pydantic schema (extra='forbid' catches bugs)
@@ -349,7 +351,11 @@ def run_stage2(date_str=None, verbose=False):
         if not code:
             continue
         name = str(candidate.get("name", ""))
-        stage1_score = float(candidate.get("composite_score", 0))
+        # Phase 11 R2: No silent defaults — missing composite_score means Stage 1 bug, skip safely
+        cs_raw = candidate.get("composite_score")
+        if cs_raw is None:
+            continue
+        stage1_score = float(cs_raw)
         
         # Run deep checks
         div_score, div_status = check_dividend_history(code, dividends_data)
