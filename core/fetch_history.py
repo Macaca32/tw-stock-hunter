@@ -99,57 +99,80 @@ def fetch_from_twse(dates, output_dir=None, verbose=False):
 
 
 def fetch_from_yfinance(stock_codes, dates, output_dir=None, verbose=False):
-    """Fetch historical data from yfinance (fallback)"""
+    """Fetch historical data from yfinance (fallback).
+
+    Phase 10 R8: yfinance .TW symbols are unreliable. This function now:
+    - Has per-batch timeout (30s total) to avoid hanging the pipeline
+    - Logs failures clearly and returns empty dict on any error
+    """
     if not YF_AVAILABLE:
         return {}
-    
+
     if output_dir is None:
         output_dir = Path(__file__).parent.parent / "data"
-    output_dir.mkdir(exist_ok=True)
-    
+
     # Convert codes to yfinance symbols
     symbols = [f"{code}.TW" for code in stock_codes]
-    
+
     if verbose:
-        print(f"  → Fetching {len(symbols)} stocks from yfinance...")
-    
+        print(f"  → Fetching {len(symbols)} stocks from yfinance (fallback, may be slow)...")
+
     all_data = {}
-    
+
     # Fetch in batches to avoid overwhelming yfinance
     batch_size = 50
+    total_timeout = 30  # seconds per batch
     for i in range(0, len(symbols), batch_size):
         batch = symbols[i:i+batch_size]
-        
+
         try:
-            # Use download for efficiency
-            data = yf.download(
-                batch,
-                period="30d",
-                group_by="ticker",
-                progress=False,
-                auto_adjust=True
-            )
-            
+            import signal
+
+            class _YfTimeout(Exception):
+                pass
+
+            def _handler(signum, frame):
+                raise _YfTimeout()
+
+            old_handler = signal.signal(signal.SIGALRM, _handler)
+            signal.alarm(total_timeout)
+
+            try:
+                data = yf.download(
+                    batch,
+                    period="30d",
+                    group_by="ticker",
+                    progress=False,
+                    auto_adjust=True
+                )
+            except _YfTimeout:
+                if verbose:
+                    print(f"    ✗ Batch {i // batch_size + 1} timed out after {total_timeout}s")
+                return all_data
+            finally:
+                signal.alarm(0)
+                signal.signal(signal.SIGALRM, old_handler)
+
             if not data.empty:
                 # Extract data for each stock
                 for symbol in batch:
                     try:
                         stock_data = data[symbol]
-                        
+
                         # Convert to our format
                         for date_obj, row in stock_data.iterrows():
                             date_iso = date_obj.strftime("%Y-%m-%d")
                             if date_iso not in dates:
                                 continue
-                            
+
                             close = row.get("Close", 0)
                             # Skip if close is NaN
                             if close != close:  # NaN check
                                 continue
-                            
+
                             if date_iso not in all_data:
                                 all_data[date_iso] = []
-                            
+
                             all_data[date_iso].append({
                                 "Code": symbol.replace(".TW", ""),
                                 "Name": "",  # yfinance doesn't provide names easily
@@ -161,16 +184,16 @@ def fetch_from_yfinance(stock_codes, dates, output_dir=None, verbose=False):
                             })
                     except:
                         pass
-            
+
             time.sleep(1)  # Rate limit
-            
+
         except Exception as e:
             if verbose:
                 print(f"    ✗ Batch error: {e}")
-    
+
     if verbose:
         print(f"  ✓ Fetched {sum(len(v) for v in all_data.values())} stock-day records")
-    
+
     return all_data
 
 
