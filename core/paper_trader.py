@@ -331,8 +331,11 @@ class PaperTrader:
         while days_back < 20:  # Safety limit
             iso = prev_date.strftime("%Y-%m-%d")
             if self.holiday_calendar.is_trading_day(iso):
-                gap_days = days_back - 1
-                return gap_days > 0, max(0, gap_days)
+                # gap_days = calendar days between today and the last trading day
+                # Normal weekend: Mon→Fri = 2 days, Fri→Mon = 2 days
+                # Only flag as post-holiday when gap > 3 (extended holiday break)
+                gap_days = days_back + 1 - 1
+                return gap_days > 3, max(0, gap_days)
             prev_date -= timedelta(days=1)
             days_back += 1
 

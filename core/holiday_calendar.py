@@ -101,6 +101,10 @@ class HolidayCalendar:
         self._raw_holidays = all_raw
 
         for entry in self._raw_holidays:
+            roc_date = str(entry.get("Date", ""))
+            iso_date = roc_date_to_iso(roc_date)
+            if not iso_date:
+                continue
 
             name = entry.get("Name", "")
             description = entry.get("Description", "")
