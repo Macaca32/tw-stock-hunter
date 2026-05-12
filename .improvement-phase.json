@@ -1,6 +1,6 @@
 {
-  "current_phase": 13,
-  "phase_name": "Corporate action backfill (2020-2025) + volume adjustment",
+  "current_phase": 14,
+  "phase_name": "Paper trader backtest alignment + regime-aware position sizing",
   "started_at": null,
   "completed_phases": [
     {
@@ -105,6 +105,14 @@
       "completed_at": null,
       "summary": "Replaced all 6 bare except: clauses in stage2_deep.py with structured error handling. Added scoring diagnostics (error counts per check, score distribution stats). Z.ai R2 fixes: return values → None instead of defaults to avoid fake signal bug, logging level changed .warning() → .debug() for scale, inner except narrowing added AttributeError alongside ValueError.",
       "commit": "36f8c09"
+    },
+    {
+      "phase": 13,
+      "name": "Corporate action backfill (2020-2025) + volume adjustment",
+      "started_at": "2026-05-13T05:30:00+08:00",
+      "completed_at": "2026-05-13T06:40:00+08:00",
+      "summary": "Fixed volume adjustment gap: stage1_screen and regime_detector now use adj_volume instead of raw volume for all calculations. Added yfinance-based backfill script (scripts/backfill_corporate_actions.py) that pulls 2020-2025 corporate actions from Yahoo Finance, since TWSE TWT49U API returns HTML. Backfilled data cached to data/twt49u_ex_dividend.json with 15 major stocks and 127 total actions.",
+      "commit": "b4a0a6b"
     }
   ],
   "notes": "Phase 0-12 done. Phase 13: corporate action backfill + volume adjustment (Z.ai critical priorities).",
