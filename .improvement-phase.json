@@ -1,7 +1,7 @@
 {
-  "current_phase": 14,
-  "phase_name": "Paper trader backtest alignment + regime-aware position sizing",
-  "started_at": null,
+  "current_phase": 15,
+  "phase_name": "Ex-date validation + alert holiday suppression",
+  "started_at": "2026-05-14T04:00:00+08:00",
   "completed_phases": [
     {
       "phase": 0,

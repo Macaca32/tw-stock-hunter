@@ -34,7 +34,7 @@ class PaperTrader:
         # Phase 10 R8: Initialize holiday calendar for gap-aware position sizing
         self.holiday_calendar = None
         try:
-            from holiday_calendar import HolidayCalendar
+            from core.holiday_calendar import HolidayCalendar
             self.holiday_calendar = HolidayCalendar(str(self.data_dir))
         except ImportError:
             pass

@@ -81,6 +81,15 @@ class CorporateActionHandler:
         self.ex_dividend_data: Dict[str, List[dict]] = {}  # From TWT49U
         self._ex_div_cache: Dict[tuple, bool] = {}
         self._loaded = False
+
+        # Phase 15: Holiday calendar for ex-date validation
+        self.holiday_calendar = None
+        try:
+            from core.holiday_calendar import HolidayCalendar
+            self.holiday_calendar = HolidayCalendar(str(self.data_dir))
+        except ImportError:
+            pass
+
         self._load_all_data()
 
     # ------------------------------------------------------------------ #
@@ -404,6 +413,84 @@ class CorporateActionHandler:
         if action:
             return action.get("stock_div", 0)
         return None
+
+    # ------------------------------------------------------------------ #
+    #  Phase 15: Ex-date validation (holiday-aware)
+    # ------------------------------------------------------------------ #
+
+    def validate_ex_dates(self) -> List[dict]:
+        """Validate all ex-dividend dates against holiday calendar.
+
+        Checks:
+        - Ex-dates must fall on trading days (not weekends/holidays)
+        - True duplicate records (same date + same amounts from different sources)
+          — Taiwan stocks commonly have BOTH cash and stock dividends on the same
+            ex-date; only flag as duplicate if amounts also match.
+        - Non-official source ex-dates on non-trading days get higher severity
+          because TWT49U (official) conflicts likely mean calendar gaps, not bad data.
+
+        Returns list of validation issues found.
+        """
+        issues: List[dict] = []
+
+        if not self.holiday_calendar:
+            return [{"type": "warning", "message": "Holiday calendar unavailable — skip ex-date validation"}]
+
+        all_codes = set(
+            list(self.ex_dividend_data.keys()) + list(self.dividend_data.keys())
+        )
+
+        for code in sorted(all_codes):
+            actions = self.get_actions_for_stock(code)
+            # Track (date, cash_div, stock_div) tuples for true duplicate detection.
+            # Taiwan stocks commonly have multiple action types on the same ex-date
+            # (e.g., cash + stock dividend), so date alone is not a duplicate key.
+            seen_actions: Dict[tuple, str] = {}
+
+            for action in actions:
+                ex_date = action["date"]
+                source = action.get("source", "unknown")
+                cash_div = float(action.get("cash_div", 0) or 0)
+                stock_div = float(action.get("stock_div", 0) or 0)
+
+                # Check 1: True duplicate — same date AND same amounts from different source
+                action_key = (ex_date, round(cash_div, 4), round(stock_div, 4))
+                if action_key in seen_actions:
+                    prev_source = seen_actions[action_key]
+                    issues.append({
+                        "type": "warning",
+                        "stock_code": code,
+                        "date": ex_date,
+                        "message": f"Exact duplicate ex-date record: {source} vs {prev_source}",
+                        "severity": "low",
+                    })
+                else:
+                    seen_actions[action_key] = source
+
+                # Check 2: Ex-date must be a trading day
+                if not self.holiday_calendar.is_trading_day(ex_date):
+                    if source == "twt49u":
+                        # Official TWSE data — likely calendar is missing a make-up workday
+                        issues.append({
+                            "type": "warning",
+                            "stock_code": code,
+                            "date": ex_date,
+                            "source": source,
+                            "message": f"TWT49U ex-date {ex_date} not in calendar — likely missing make-up workday",
+                            "severity": "medium",
+                        })
+                    else:
+                        # Non-official source (estimated from declaration) — more likely genuinely wrong
+                        issues.append({
+                            "type": "warning",
+                            "stock_code": code,
+                            "date": ex_date,
+                            "source": source,
+                            "message": f"Estimated ex-date {ex_date} is not a trading day",
+                            "severity": "high",
+                        })
+
+        return issues
 
     # ------------------------------------------------------------------ #
     #  Backward price adjustment engine

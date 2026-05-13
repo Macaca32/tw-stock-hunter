@@ -314,6 +314,42 @@ def validate_data(results, verbose=False):
     return True, []
 
 
+def _run_ex_date_validation(data_dir: Path, verbose: bool = False):
+    """Phase 15: Run ex-date validation against holiday calendar.
+
+    Checks that all corporate action ex-dates fall on trading days.
+    Non-blocking — reports warnings/errors but does not abort the pipeline.
+    """
+    try:
+        from core.corporate_actions import CorporateActionHandler
+        handler = CorporateActionHandler(str(data_dir))
+        issues = handler.validate_ex_dates()
+        if issues and verbose:
+            errors = [i for i in issues if i.get("type") == "error"]
+            warnings = [i for i in issues if i.get("type") == "warning"]
+            print(f"\n📅 Ex-date validation: {len(errors)} error(s), {len(warnings)} warning(s)")
+            for issue in errors[:5]:  # Show up to 5 errors
+                code = issue.get("stock_code", "?")
+                date = issue.get("date", "?")
+                msg = issue.get("message", "")
+                print(f"   ❌ [{code}] {date}: {msg}")
+            if len(errors) > 5:
+                print(f"   ... and {len(errors) - 5} more errors")
+            for issue in warnings[:3]:  # Show up to 3 warnings
+                msg = issue.get("message", "")
+                code = issue.get("stock_code", "")
+                date = issue.get("date", "")
+                if code:
+                    print(f"   ⚠️ [{code}] {date}: {msg}")
+                else:
+                    print(f"   ⚠️ {msg}")
+    except ImportError:
+        pass  # corporate_actions not available
+    except Exception as e:
+        if verbose:
+            print(f"\n⚠ Ex-date validation failed: {e}")
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Fetch TWSE daily data")
@@ -349,6 +385,9 @@ def main():
     if not validate_ingested_ok:
         print(f"\n❌ Aborting save — data quality too low (>10% validation failures)")
         sys.exit(1)
+
+    # Phase 15: Ex-date validation against holiday calendar
+    _run_ex_date_validation(data_dir=Path(__file__).parent.parent / "data", verbose=verbose)
     
     # Validate before saving (record count check)
     ok, issues = validate_data(results, verbose=verbose)

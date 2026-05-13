@@ -11,19 +11,40 @@ Features:
 """
 
 import json
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 
 class TelegramAlerts:
-    def __init__(self):
-        self.data_dir = Path(__file__).parent.parent / "data"
+    def __init__(self, data_dir=None):
+        self.data_dir = Path(data_dir) if data_dir else Path(__file__).parent.parent / "data"
         self.reports_dir = Path(__file__).parent.parent / "reports"
         self.last_alert_file = self.data_dir / "last_alert.json"
         self.cooldown_minutes = 30  # Min time between alerts
+
+        # Phase 15: Holiday calendar for alert suppression on non-trading days
+        self.holiday_calendar = None
+        try:
+            from core.holiday_calendar import HolidayCalendar
+            self.holiday_calendar = HolidayCalendar(str(self.data_dir))
+        except ImportError:
+            pass
     
     def should_alert(self, alert_type="daily"):
-        """Check if we should send an alert (rate limiting)"""
+        """Check if we should send an alert (rate limiting + holiday suppression)
+
+        Phase 15: Suppress daily alerts on non-trading days (weekends/holidays)
+        to avoid sending stale or irrelevant information.
+        Critical alerts and heartbeat checks ALWAYS bypass suppression.
+        """
+        # ── Holiday suppression ──────────────────────────────────
+        NEVER_SUPPRESS = {"regime_change", "crisis", "black_swan", "heartbeat"}
+
+        if alert_type not in NEVER_SUPPRESS:
+            today = date.today().isoformat()  # ISO string for is_trading_day()
+            if self.holiday_calendar and not self.holiday_calendar.is_trading_day(today):
+                return False
+
         if not self.last_alert_file.exists():
             return True
         
