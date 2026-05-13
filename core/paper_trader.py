@@ -9,8 +9,11 @@ Takes Stage 2 candidates and simulates entry/exit based on:
 """
 
 import json
+import logging
 from datetime import datetime, timedelta
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 class PaperTrader:
@@ -35,6 +38,19 @@ class PaperTrader:
             self.holiday_calendar = HolidayCalendar(str(self.data_dir))
         except ImportError:
             pass
+
+        # Phase 14 R2: Regime detector integration (Z.ai fixes)
+        self._detect_regime = None
+        self._regime_detector_available = False
+        try:
+            from core.regime_detector import detect_regime
+            if callable(detect_regime):
+                self._detect_regime = detect_regime
+                self._regime_detector_available = True
+        except ImportError:
+            logger.debug("regime_detector not available — regime defaults to normal")
+        except Exception as e:
+            logger.warning(f"regime_detector import failed: {e}")
 
     def _default_config(self):
         return {
@@ -154,15 +170,21 @@ class PaperTrader:
         fallback_stop = entry_price * (1 + self.config["stop_loss_pct"])
         return round(fallback_stop, 2), None
 
-    def simulate_entry(self, candidates, date_str=None):
+    def simulate_entry(self, candidates, date_str=None, regime_mult=1.0):
         """Simulate entry for top candidates
 
         FIX v3: Use ATR-based stops, add gap risk buffer,
         add liquidity check (skip stocks with insufficient price history),
         enforce sector concentration limits (max 3 per sector).
+        Phase 14: regime_mult scales position count based on market regime.
+            1.0 = normal, 0.75 = caution, 0.3 = stress, 0.0 = crisis/black_swan
         """
         if date_str is None:
             date_str = datetime.now().strftime("%Y-%m-%d")
+
+        # Phase 14 R2: Skip all entries when regime says zero positions
+        if regime_mult <= 0.0:
+            return []
 
         new_trades = []
         price_history = self.load_price_history()
@@ -175,13 +197,19 @@ class PaperTrader:
         holiday_risk_factor = self._get_holiday_risk_factor(date_str)
         is_post_holiday, post_holiday_gap = self._is_post_holiday(date_str)
 
-        # Only take top candidates up to max_positions
-        for candidate in candidates[:self.config["max_positions"]]:
+        # Phase 14 R2: Scale max_positions by regime multiplier.
+        # Don't force min(1,...) — let the math work so stress/crisis actually reduce positions.
+        effective_max = int(self.config["max_positions"] * regime_mult)
+        if effective_max <= 0:
+            return []  # No new entries in this regime
+
+        # Only take top candidates up to effective_max positions
+        for candidate in candidates[:effective_max]:
             code = candidate["code"]
             name = candidate["name"]
 
-            # Get entry price: prefer candidate's close, fallback to price history
-            entry_price = candidate.get("close", 0)
+            # Phase 14 R2: Use adj_close consistently for P&L alignment with live pipeline
+            entry_price = candidate.get("adj_close") or candidate.get("close", 0)
 
             # FIX: Stage 2 candidates may not have 'close' field
             # Look up from price history if missing
@@ -248,7 +276,9 @@ class PaperTrader:
                 "commission": round(entry_price * self._get_transaction_cost(code), 2),
                 "combined_score": candidate.get("combined_score", 0),
                 "stage1_score": candidate.get("stage1_score", 0),
-                "stage2_score": candidate.get("stage2_score", 0)
+                "stage2_score": candidate.get("stage2_score", 0),
+                # Phase 14: Regime-aware metadata
+                "regime_mult": round(regime_mult, 2),
             }
 
             new_trades.append(trade)
@@ -306,6 +336,85 @@ class PaperTrader:
             return "other"
         except:
             return "unknown"
+
+    # ------------------------------------------------------------------ #
+    #  Phase 10 R8: Holiday-aware helpers
+    # ------------------------------------------------------------------ #
+
+    # ------------------------------------------------------------------ #
+    #  Phase 14: Regime-aware position sizing + backtest alignment
+    # ------------------------------------------------------------------ #
+
+    def _get_regime(self, price_history, date_str=None):
+        """Detect market regime as of a specific date.
+
+        CRITICAL: Only uses price data UP TO date_str to avoid look-ahead bias.
+        Returns (regime_name, position_mult) tuple. Falls back to ('normal', 1.0)
+        if regime detection is unavailable or fails.
+        """
+        if not self._regime_detector_available:
+            return 'normal', 1.0
+
+        try:
+            # Parse cutoff date
+            cutoff = datetime.strptime(date_str, "%Y-%m-%d").date()
+
+            # ── CRITICAL FIX: Filter to only data on or before date_str ──
+            filtered_prices = {}
+            min_samples_needed = 20
+
+            for stock_id, entries in price_history.items():
+                if not isinstance(entries, list):
+                    continue
+
+                past_entries = []
+                for entry in entries:
+                    try:
+                        entry_date = datetime.strptime(entry.get("date", ""), "%Y-%m-%d").date()
+                    except (ValueError, TypeError):
+                        continue
+                    if entry_date <= cutoff:
+                        past_entries.append(entry)
+
+                if len(past_entries) >= min_samples_needed:
+                    filtered_prices[stock_id] = past_entries
+
+            if not filtered_prices:
+                return 'normal', 1.0
+
+            regime_name = self._detect_regime(filtered_prices)
+            position_mult = self._get_regime_position_mult(regime_name)
+            return regime_name, position_mult
+        except Exception as e:
+            logger.debug(f"Regime detection failed: {e}")
+            return 'normal', 1.0
+
+    def _get_regime_position_mult(self, regime):
+        """Get position size multiplier based on market regime.
+
+        ALIGNED WITH PHASE 3 (regime_detector.py + weights.json v4.0).
+        Read from config first, fallback to hardcoded defaults that match Phase 3.
+
+        NORMAL:   1.0x (full sizing)
+        CAUTION:  0.6x (reduce 40%)
+        STRESS:   0.3x (reduce 70%)
+        CRISIS:   0.1x (90% reduction, keep minimal exposure)
+        BLACK_SWAN: 0.0x (exit everything)
+        """
+        # Try config first for single source of truth
+        mult = self.config.get("regime_position_multipliers", {}).get(regime.lower())
+        if mult is not None:
+            return float(mult)
+
+        # Defaults MUST match Phase 3 regime_detector.py
+        DEFAULTS = {
+            'normal': 1.0,
+            'caution': 0.6,
+            'stress': 0.3,
+            'crisis': 0.1,
+            'black_swan': 0.0,
+        }
+        return DEFAULTS.get(regime.lower(), 1.0)
 
     # ------------------------------------------------------------------ #
     #  Phase 10 R8: Holiday-aware helpers
@@ -455,8 +564,22 @@ class PaperTrader:
             if not candidates:
                 continue
 
-            # Simulate entry
-            trades = self.simulate_entry(candidates, date_str)
+            # Phase 14: Get market regime for this date and scale positions
+            # Phase 14 R2: Pre-compute regime cache for all backtest dates
+            # to avoid redundant computation and look-ahead bias
+            if not hasattr(self, '_regime_cache'):
+                self._regime_cache = {}
+
+            if date_str not in self._regime_cache:
+                regime, regime_mult = self._get_regime(prices, date_str)
+                self._regime_cache[date_str] = (regime, regime_mult)
+            else:
+                regime, regime_mult = self._regime_cache[date_str]
+
+            # Phase 14: Use cached regime for this date and scale positions
+            
+            # Simulate entry (with regime-aware position sizing)
+            trades = self.simulate_entry(candidates, date_str, regime_mult=regime_mult)
 
             # Simulate exit using price history
             for trade in trades:
@@ -492,7 +615,8 @@ class PaperTrader:
                         # Scan forward for exit
                         for j in range(entry_idx + 1, min(entry_idx + self.config["max_holding_days"] + 1, len(history))):
                             day = history[j]
-                            price = day["close"]
+                            # Phase 14: Use adjusted close for consistency with live scoring pipeline
+                            price = day.get("adj_close", day["close"])
                             day_date = day["date"]
 
                             # FIX v3: Skip stop-loss check on ex-dividend dates
@@ -531,7 +655,8 @@ class PaperTrader:
                         # If no exit triggered, use last available price
                         if exit_price is None:
                             last_day = history[min(entry_idx + self.config["max_holding_days"], len(history) - 1)]
-                            exit_price = last_day["close"]
+                            # Phase 14: Use adjusted close for consistency with live scoring pipeline
+                            exit_price = last_day.get("adj_close", last_day["close"])
                             exit_date = last_day["date"]
                             exit_reason = "max_holding_days"
 
