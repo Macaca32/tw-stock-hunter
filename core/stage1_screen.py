@@ -182,8 +182,8 @@ def check_hard_filters(stock, company_info, datasets, thresholds, price_history=
     # FIX v3: Use ADV in TWD value, NOT share count.
     # A NT$500 stock trading 3M shares = NT$1.5B daily value.
     # A NT$15 stock trading 6M shares = NT$90M daily value.
-    # Minimum NT$100M daily value (~US$3M) for institutional-grade screening.
-    adv_value_threshold = stage1_thresh.get("min_adv_twd", 100000000)  # NT$100M/day default
+    # Minimum NT$50M daily value (~US$1.5M) for institutional-grade screening.
+    adv_value_threshold = stage1_thresh.get("min_adv_twd", 50000000)  # NT$50M/day default (matches thresholds.json)
     if price_history and stock_code in price_history:
         history = price_history[stock_code]
         if len(history) >= 20:
