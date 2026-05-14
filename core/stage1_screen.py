@@ -217,11 +217,19 @@ def check_hard_filters(stock, company_info, datasets, thresholds, price_history=
     
     # Market cap filter (use company info if available)
     # FIX v3: TWSE vs TPEx differentiation - stricter for TPEx
+    # Phase 17: Corrected market cap calculation.
+    #   實收資本額 (paid-in capital) is total NT$ amount, NOT share count.
+    #   Taiwan face value = NT$10/share, so shares_outstanding = paid_in / 10.
+    #   market_cap = close_price × shares_outstanding = close × (paid_in / 10)
     if company_info:
         paid_in_raw = get_field(company_info, "實收資本額", "paid_in_capital", "")
         paid_in = safe_float(paid_in_raw, 0)
-        market_cap = close * paid_in  # 實收資本額 is already in dollars
-        
+
+        # Phase 17: Corrected formula — was close * paid_in (treated paid_in as shares)
+        # Now: close * (paid_in / 10) where 10 = Taiwan face value per share
+        shares_outstanding = paid_in / 10.0 if paid_in > 0 else 0
+        market_cap = close * shares_outstanding
+
         # Determine if TPEx or TWSE (TPEx codes >= 9900 or in 6xxx range)
         is_tpex = False
         try:
@@ -230,7 +238,7 @@ def check_hard_filters(stock, company_info, datasets, thresholds, price_history=
                 is_tpex = True
         except:
             pass
-        
+
         # FIX v3: Higher market cap floor for position sizing safety
         # NT$50B for TWSE, NT$30B for TPEx (stricter due to higher risk)
         min_cap = stage1_thresh.get("min_market_cap_tpex" if is_tpex else "min_market_cap", 50000000000)
@@ -258,15 +266,18 @@ def check_hard_filters(stock, company_info, datasets, thresholds, price_history=
     
     # === PLEDGE RISK CHECK ===
     # Major shareholders with >30% pledged shares = governance red flag
+    # Phase 17: Pledged shares (累計質押股數) is in SHARES, not NT$.
+    #   Must compare against shares outstanding (= paid_in / 10), not raw paid_in.
     pledge_data = datasets.get("pledge", [])
     for p in pledge_data:
         if get_field(p, "公司代號", "Code", "") == stock_code:
             pledged = safe_float(get_field(p, "累計質押股數", "total_pledged", ""), 0)
-            # If we have company info, check against paid-in capital
+            # If we have company info, check against shares outstanding
             if company_info and pledged > 0:
                 paid_in = safe_float(get_field(company_info, "實收資本額", "paid_in_capital", ""), 0)
                 if paid_in > 0:
-                    pledge_ratio = pledged / paid_in
+                    shares_outstanding = paid_in / 10.0  # Taiwan face value = NT$10/share
+                    pledge_ratio = pledged / shares_outstanding
                     if pledge_ratio > 0.30:
                         return False, "high_pledge_risk"
     
