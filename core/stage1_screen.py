@@ -588,21 +588,26 @@ def _score_momentum_with_history(history):
         elif current < ma5 < ma10:
             score -= 10  # Moderate bearish
         
-        # RSI (±15 points)
-        gains = []
-        losses = []
-        for i in range(1, len(closes)):
-            change = closes[i] - closes[i-1]
-            if change > 0:
-                gains.append(change)
-                losses.append(0)
-            else:
-                gains.append(0)
-                losses.append(abs(change))
-        
-        avg_gain = sum(gains) / len(gains) if gains else 0
-        avg_loss = sum(losses) / len(losses) if losses else 0.0001
-        
+        # RSI (±15 points) — Wilder's smoothing (standard 14-period)
+        period = 14
+        changes = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
+        gains = [c if c > 0 else 0 for c in changes]
+        losses = [abs(c) if c < 0 else 0 for c in changes]
+
+        if len(changes) < period:
+            # Not enough data for Wilder's RSI; fall back to simple average
+            avg_gain = sum(gains) / len(gains) if gains else 0
+            avg_loss = sum(losses) / len(losses) if losses else 0.0001
+        else:
+            # First average: simple mean of first `period` values
+            avg_gain = sum(gains[:period]) / period
+            avg_loss = sum(losses[:period]) / period
+            # Wilder's exponential smoothing for remaining values
+            for i in range(period, len(changes)):
+                avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+                avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+
+        avg_loss = avg_loss if avg_loss != 0 else 0.0001
         rs = avg_gain / avg_loss
         rsi = 100 - (100 / (1 + rs))
         
