@@ -137,10 +137,18 @@
       "completed_at": "2026-05-15T05:25:00+08:00",
       "summary": "Z.ai agent mode completed all 5 fixes. #5 market cap: close × (paid_in/10) using Taiwan face value NT$10/share, pledge ratio also fixed. #4 regime signature: added detect_regime_from_prices() entry point to regime_detector.py. #8 backtest stops: rewrote with ATR-based logic (2.5×ATR + 0.5×gap buffer), removed random noise simulation. #1 post-holiday off-by-one: proper calendar-day gap calc, threshold adjusted >= 4. #20 deps: added pydantic + yfinance to requirements.txt.",
       "commit": "e7c7063..0fa9886 (5 commits)"
+    },
+    {
+      "phase": 18,
+      "name": "Remaining bug fixes — RSI Wilder smoothing, import paths, config mismatches",
+      "started_at": "2026-05-15T05:30:00+08:00",
+      "completed_at": "2026-05-15T06:00:00+08:00",
+      "summary": "Z.ai agent mode completed all 6 fixes. #9 RSI: Wilder's exponential smoothing (14-period). #2 pd import: moved to module level in fetch_institutional.py. #3 import paths: normalized to bare module names across core/. #6 ADV threshold: default matches thresholds.json (NT$50M). #14 regime weights: uses tiered regime names from config. #16 stage2 weights: loaded from config with fallback defaults.",
+      "commit": "63ec325..ddd3bfe (6 commits)"
     }
   ],
-  "notes": "Phase 17 done. Phase 18 pending: RSI Wilder smoothing (#9), import path cleanup (#3), config mismatches (#6, #14, #16), pd import fix (#2), performance scan O(n²) (#10)."
-  "rounds_completed": 9,
+  "notes": "Phase 18 done. Phase 19 pending: O(n²) performance scan (#10), orchestrator/pipeline runner (#11), other remaining items from Z.ai review.",
+  "rounds_completed": 10,
   "last_zai_round": {
     "round": 6,
     "date": "2026-05-11",
