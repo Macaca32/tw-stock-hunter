@@ -239,7 +239,9 @@ class PaperTrader:
             is_post_holiday, post_holiday_gap = self._is_post_holiday(date_str)
             atr_mult = self.config.get("atr_stop_mult", 2.5)
             # Phase 10 R8: Widen stops by 30% on first trading day after long gap (post-holiday volatility spike)
-            if is_post_holiday and post_holiday_gap >= 3:
+            # Phase 17: Normal weekend gap = 3 days (Fri→Mon), so only widen for
+            # gaps > 3 days (i.e., 4+ day gaps like LNY, national holidays)
+            if is_post_holiday and post_holiday_gap >= 4:
                 atr_mult *= 1.3
             stop_loss, atr_value = self.get_atr_stop(
                 code, entry_price, price_history,
@@ -442,7 +444,14 @@ class PaperTrader:
         """Check if the given date is a post-holiday trading day (first trading day after a gap).
 
         Phase 10 R8: Post-holiday days have wider volatility spikes.
+        Phase 17: Fixed off-by-one — use proper calendar-day gap calculation
+        instead of the broken 'days_back + 1 - 1' which was a no-op.
+
         Returns (is_post_holiday: bool, gap_days: int) tuple.
+        gap_days = calendar days between date_str and the previous trading day.
+        Normal weekend (Mon after Fri): gap_days = 3 (Fri→Sat→Sun→Mon)
+        Extended LNY (Wed after prev Wed): gap_days = 7
+        Only flagged as post-holiday when gap > 3 (extended break).
         """
         if not self.holiday_calendar:
             return False, 0
@@ -454,17 +463,15 @@ class PaperTrader:
 
         # Walk backward to find the previous trading day
         prev_date = dt - timedelta(days=1)
-        days_back = 0
-        while days_back < 20:  # Safety limit
+        steps = 0
+        while steps < 20:  # Safety limit
             iso = prev_date.strftime("%Y-%m-%d")
             if self.holiday_calendar.is_trading_day(iso):
-                # gap_days = calendar days between today and the last trading day
-                # Normal weekend: Mon→Fri = 2 days, Fri→Mon = 2 days
-                # Only flag as post-holiday when gap > 3 (extended holiday break)
-                gap_days = days_back + 1 - 1
+                # Phase 17: Direct calendar-day gap between the two dates
+                gap_days = (dt - prev_date).days
                 return gap_days > 3, max(0, gap_days)
             prev_date -= timedelta(days=1)
-            days_back += 1
+            steps += 1
 
         return False, 0
 
