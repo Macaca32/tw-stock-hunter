@@ -10,13 +10,11 @@
     "technical_momentum": 0.20
   },
   "stage2": {
-    "revenue_growth": 0.20,
-    "margin_stability": 0.15,
-    "roe_level": 0.15,
-    "cash_flow_quality": 0.15,
-    "balance_sheet": 0.15,
-    "earnings_surprise": 0.10,
-    "management": 0.10
+    "dividend": 0.25,
+    "announcements": 0.20,
+    "shareholders": 0.15,
+    "pledge": 0.20,
+    "penalties": 0.20
   },
   "regime_weights": {
     "normal": {

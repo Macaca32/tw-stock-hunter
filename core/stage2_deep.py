@@ -448,14 +448,19 @@ def run_stage2(date_str=None, verbose=False):
                 print(f"   ❌ DISQUALIFIED {code} {name}: {'; '.join(red_flags)}")
             continue
         
-        # Weighted Stage 2 score
+        # Weighted Stage 2 score — load from config, fall back to hardcoded defaults
         stage2_weights = weights.get("stage2", {})
+        w_div = stage2_weights.get("dividend", 0.25)
+        w_ann = stage2_weights.get("announcements", 0.20)
+        w_sh  = stage2_weights.get("shareholders", 0.15)
+        w_plg = stage2_weights.get("pledge", 0.20)
+        w_pen = stage2_weights.get("penalties", 0.20)
         fundamental_score = (
-            div_score * 0.25 +
-            ann_score * 0.20 +
-            sh_score * 0.15 +
-            pledge_score * 0.20 +
-            penalty_score * 0.20
+            div_score * w_div +
+            ann_score * w_ann +
+            sh_score * w_sh +
+            pledge_score * w_plg +
+            penalty_score * w_pen
         )
         
         result = {
