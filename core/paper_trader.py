@@ -517,12 +517,21 @@ class PaperTrader:
         return trade
 
     def _calc_holding_days(self, entry_date, exit_date):
-        """Calculate holding days"""
+        """Calculate holding days (Phase 16: trading days only, not calendar days).
+
+        During LNY gaps (5-8 consecutive non-trading weekdays), counting calendar
+days would inflate holding period and trigger premature max_holding_days exits.
+        E.g., a position held across LNY could show 12 calendar days but only
+        ~6 actual trading days.
+        """
         try:
+            if self.holiday_calendar:
+                return self.holiday_calendar.count_trading_days_in_range(entry_date, exit_date)
+            # Fallback: calendar days (less accurate but safe)
             entry = datetime.strptime(entry_date, "%Y-%m-%d")
-            exit = datetime.strptime(exit_date, "%Y-%m-%d")
-            return (exit - entry).days
-        except:
+            exit_dt = datetime.strptime(exit_date, "%Y-%m-%d")
+            return (exit_dt - entry).days
+        except Exception:
             return 0
 
     def run_backtest(self, lookback_days=60):
@@ -612,21 +621,36 @@ class PaperTrader:
                         entry_idx = best_idx
 
                     if entry_idx is not None:
-                        # Scan forward for exit
-                        for j in range(entry_idx + 1, min(entry_idx + self.config["max_holding_days"] + 1, len(history))):
+                        # Phase 16 Step 3: Holiday-aware exit scanning
+                        # Count trading days (not array indices) to respect holidays.
+                        # Price history from fetch_history.py is already filtered to
+                        # trading-days-only, but unscheduled gaps (typhoon closures)
+                        # may still create index-vs-date mismatches.
+                        max_trade_days = self.config["max_holding_days"]
+                        trading_days_counted = 0
+
+                        for j in range(entry_idx + 1, len(history)):
                             day = history[j]
-                            # Phase 14: Use adjusted close for consistency with live scoring pipeline
-                            price = day.get("adj_close", day["close"])
                             day_date = day["date"]
 
+                            # Phase 16 Step 7b: Stale-data detection — skip entries
+                            # that are non-trading days (typhoon closures not in calendar)
+                            if self.holiday_calendar and not self.holiday_calendar.is_trading_day(day_date):
+                                logger.debug(
+                                    f"Backtest: {code} skipping non-trading day {day_date} "
+                                    f"(likely typhoon closure)"
+                                )
+                                continue
+
+                            trading_days_counted += 1
+                            price = day.get("adj_close", day["close"])
+
                             # FIX v3: Skip stop-loss check on ex-dividend dates
-                            # Ex-dividend drops are mechanical, not market signals
                             is_ex_div = False
                             if self.corp_handler:
                                 is_ex_div = self.corp_handler.is_ex_dividend_date(code, day_date)
 
                             if is_ex_div:
-                                # Adjust price for dividend to check against stop
                                 adj_price = self.corp_handler.adjust_price_for_dividend(price, code, day_date)
                                 if adj_price <= trade["stop_loss"]:
                                     exit_price = trade["stop_loss"]
@@ -638,7 +662,6 @@ class PaperTrader:
                                     exit_date = day_date
                                     exit_reason = "take_profit"
                                     break
-                                # Otherwise continue - ex-div drop didn't trigger exit
                                 continue
 
                             if price <= trade["stop_loss"]:
@@ -652,10 +675,25 @@ class PaperTrader:
                                 exit_reason = "take_profit"
                                 break
 
-                        # If no exit triggered, use last available price
+                            # Phase 16 Step 3: Check max holding days by trading day count
+                            if trading_days_counted >= max_trade_days:
+                                exit_price = price
+                                exit_date = day_date
+                                exit_reason = "max_holding_days"
+                                break
+
+                        # If no exit triggered, use last available price in history window
                         if exit_price is None:
-                            last_day = history[min(entry_idx + self.config["max_holding_days"], len(history) - 1)]
-                            # Phase 14: Use adjusted close for consistency with live scoring pipeline
+                            # Phase 16 Step 3: Find the last trading day within max_holding_days
+                            last_day_idx = entry_idx + self.config["max_holding_days"]
+                            # Walk forward counting actual trading days, skipping gaps
+                            if self.holiday_calendar and last_day_idx >= len(history):
+                                # Use the last available entry as fallback
+                                last_day_idx = len(history) - 1
+                            elif not self.holiday_calendar:
+                                last_day_idx = min(last_day_idx, len(history) - 1)
+
+                            last_day = history[last_day_idx]
                             exit_price = last_day.get("adj_close", last_day["close"])
                             exit_date = last_day["date"]
                             exit_reason = "max_holding_days"

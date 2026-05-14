@@ -1,20 +1,20 @@
 {
-  "current_phase": 15,
-  "phase_name": "Ex-date validation + alert holiday suppression",
-  "started_at": "2026-05-14T04:00:00+08:00",
+  "current_phase": 16,
+  "phase_name": "Pending Z.ai review backlog",
+  "started_at": "2026-05-14T05:30:00+08:00",
   "completed_phases": [
     {
       "phase": 0,
-      "name": "Transaction cost fix (0.3% \u2192 0.6% TWSE / 0.7% TPEx)",
+      "name": "Transaction cost fix (0.3% → 0.6% TWSE / 0.7% TPEx)",
       "completed_at": "2026-05-11T13:10:00+08:00",
       "summary": "Replaced flat 0.3% commission with market-specific round-trip costs. TWSE 0.6%, TPEx 0.7%. Added _is_tpex() and _get_transaction_cost() helpers. Updated all 3 P&L paths. Verified via Z.ai review.",
       "commit": "9662b54"
     },
     {
       "phase": 1,
-      "name": "Data quality threshold fix (50-day \u2192 240-day min for 300-day SMA)",
+      "name": "Data quality threshold fix (50-day → 240-day min for 300-day SMA)",
       "completed_at": "2026-05-11T13:25:00+08:00",
-      "summary": "Changed data quality gate from 50-day to 240-day minimum (one full trading year). Below 240 days = low confidence, 240-270 = medium, 270+ = high. Fixed variable naming (min_days_50 \u2192 max_history_days).",
+      "summary": "Changed data quality gate from 50-day to 240-day minimum (one full trading year). Below 240 days = low confidence, 240-270 = medium, 270+ = high. Fixed variable naming (min_days_50 → max_history_days).",
       "commit": "5cfce94"
     },
     {
@@ -26,7 +26,7 @@
     },
     {
       "phase": 3,
-      "name": "Tiered regime system (NORMAL\u2192CAUTION\u2192STRESS\u2192CRISIS\u2192BLACK_SWAN)",
+      "name": "Tiered regime system (NORMAL→CAUTION→STRESS→CRISIS→BLACK_SWAN)",
       "completed_at": "2026-05-11T16:30:00+08:00",
       "summary": "Replaced 3-regime system with 5-tier system. BLACK_SWAN bypasses 5-day freeze for emergency exits. Position sizing: normal=1.0x, caution=0.6x, stress=0.3x, crisis=0.1x, black_swan=0.0x. Updated regime_rules.json, telegram_alerts.py emoji mapping. Config version bumped to 4.0.",
       "commit": "7b949df"
@@ -70,7 +70,7 @@
       "phase": 9,
       "name": "Survivorship Bias Tier 2: Holiday calendar, Pydantic schema enforcement",
       "completed_at": "2026-05-12T05:50:00+08:00",
-      "summary": "Full holiday calendar with cross-year loading, half-day sessions, make-up workdays. Pydantic schemas for all data types with extra='forbid' on internal schemas. Validation at ingestion boundary reduced errors from 44.5% \u2192 0.2%. Fixed critical batch_validate() bug (normalize_keys broke aliases) and RevenueRecord schema mismatch.",
+      "summary": "Full holiday calendar with cross-year loading, half-day sessions, make-up workdays. Pydantic schemas for all data types with extra='forbid' on internal schemas. Validation at ingestion boundary reduced errors from 44.5% → 0.2%. Fixed critical batch_validate() bug (normalize_keys broke aliases) and RevenueRecord schema mismatch.",
       "commit": "e37097a"
     },
     {
@@ -86,15 +86,15 @@
       "start_date": "2026-05-13",
       "end_date": "2026-05-13",
       "issues_addressed": [
-        "Added validate_stage1_candidates() \u2014 strict Pydantic validation between Stage 1 and Stage 2",
-        "Score breakdown defaults (25) removed \u2014 missing data must fail, not be scored as mediocre",
-        "Silent composite_score default (.get(..., 0)) fixed \u2014 now skips safely instead of masking bugs",
+        "Added validate_stage1_candidates() — strict Pydantic validation between Stage 1 and Stage 2",
+        "Score breakdown defaults (25) removed — missing data must fail, not be scored as mediocre",
+        "Silent composite_score default (.get(..., 0)) fixed — now skips safely instead of masking bugs",
         "Defensive field access in run_stage2() loop"
       ],
       "fixes_applied": [
-        "Score defaults: sb.get('revenue', 25) \u2192 sb['revenue'] (direct key access)",
-        "composite_score: .get('composite_score', 0) \u2192 None check + continue",
-        "Verified code vs stock_id field name \u2014 no mismatch in practice"
+        "Score defaults: sb.get('revenue', 25) → sb['revenue'] (direct key access)",
+        "composite_score: .get('composite_score', 0) → None check + continue",
+        "Verified code vs stock_id field name — no mismatch in practice"
       ],
       "status": "completed - R1 applied, Z.ai response truncated but critical items addressed"
     },
@@ -113,15 +113,23 @@
       "completed_at": "2026-05-13T06:40:00+08:00",
       "summary": "Fixed volume adjustment gap: stage1_screen and regime_detector now use adj_volume instead of raw volume for all calculations. Added yfinance-based backfill script (scripts/backfill_corporate_actions.py) that pulls 2020-2025 corporate actions from Yahoo Finance, since TWSE TWT49U API returns HTML. Backfilled data cached to data/twt49u_ex_dividend.json with 15 major stocks and 127 total actions.",
       "commit": "b4a0a6b"
+    },
+    {
+      "phase": 15,
+      "name": "Ex-date validation + alert holiday suppression",
+      "started_at": "2026-05-14T04:00:00+08:00",
+      "completed_at": "2026-05-14T05:30:00+08:00",
+      "summary": "Added validate_ex_dates() to corporate_actions.py with Taiwan-aware duplicate detection (date+cash_div+stock_div tuple key). Holiday suppression in telegram_alerts.py for daily alerts, critical/heartbeat bypass. Fixed 7 Z.ai R1 bugs: import paths (3 files), false-positive duplicate detection, type mismatch in is_trading_day(), inverted severity logic, missing return statement, pseudo-code syntax error.",
+      "commit": "0afe5f3"
     }
   ],
-  "notes": "Phase 0-12 done. Phase 13: corporate action backfill + volume adjustment (Z.ai critical priorities).",
+  "notes": "Phase 15 done. Remaining Z.ai items: Step 3 (backtest fills), Step 7b (typhoon/stale-data edge cases).",
   "rounds_completed": 8,
   "last_zai_round": {
     "round": 6,
     "date": "2026-05-11",
     "findings": [
-      "stock_div /100 \u2192 /10 (Taiwan \u5143 convention)",
+      "stock_div /100 → /10 (Taiwan 元 convention)",
       "Ex-date price should not be adjusted (already post-dividend)",
       "Regime label mismatch: bull vs normal, stale 5-day holdover",
       "Stage 2 zero candidates due to missing dividends/major_sh data loads"
@@ -139,9 +147,9 @@
       "round": 6,
       "date": "2026-05-11",
       "items_addressed": [
-        "Score quantization \u2192 continuous scoring (was only 2 unique div scores)",
+        "Score quantization → continuous scoring (was only 2 unique div scores)",
         "normalize_stock_id() utility for data matching",
-        "Stage 1 threshold tuning: market_cap NT\\$50B\u2192NT\\$30B, adv NT\\$100M\u2192NT\\$50M",
+        "Stage 1 threshold tuning: market_cap NT\\$50B→NT\\$30B, adv NT\\$100M→NT\\$50M",
         "Regime cross-check against TAIEX drawdown (verified crisis label)",
         "Volume adjustment already applied from R4"
       ],
