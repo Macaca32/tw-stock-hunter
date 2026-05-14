@@ -34,18 +34,20 @@ class PaperTrader:
         # Phase 10 R8: Initialize holiday calendar for gap-aware position sizing
         self.holiday_calendar = None
         try:
-            from core.holiday_calendar import HolidayCalendar
+            from holiday_calendar import HolidayCalendar
             self.holiday_calendar = HolidayCalendar(str(self.data_dir))
         except ImportError:
             pass
 
-        # Phase 14 R2: Regime detector integration (Z.ai fixes)
-        self._detect_regime = None
+        # Phase 17: Use detect_regime_from_prices (accepts pre-filtered data)
+        # Old code imported detect_regime(date_str, verbose) which cannot accept
+        # pre-filtered price data — caused signature mismatch in backtest.
+        self._detect_regime_from_prices = None
         self._regime_detector_available = False
         try:
-            from core.regime_detector import detect_regime
-            if callable(detect_regime):
-                self._detect_regime = detect_regime
+            from regime_detector import detect_regime_from_prices
+            if callable(detect_regime_from_prices):
+                self._detect_regime_from_prices = detect_regime_from_prices
                 self._regime_detector_available = True
         except ImportError:
             logger.debug("regime_detector not available — regime defaults to normal")
@@ -382,7 +384,23 @@ class PaperTrader:
             if not filtered_prices:
                 return 'normal', 1.0
 
-            regime_name = self._detect_regime(filtered_prices)
+            # Phase 17: Call detect_regime_from_prices with pre-filtered data.
+            # This function accepts the price dict directly, unlike detect_regime()
+            # which expects (date_str, verbose) and loads its own data.
+            # Also load previous regime for transition logic if available.
+            prev_regime_data = None
+            regime_file = self.data_dir / "regime.json"
+            if regime_file.exists():
+                try:
+                    with open(regime_file, 'r', encoding='utf-8') as f:
+                        prev_regime_data = json.load(f)
+                except (json.JSONDecodeError, IOError):
+                    pass
+
+            regime_name = self._detect_regime_from_prices(
+                filtered_prices,
+                prev_regime_data=prev_regime_data,
+            )
             position_mult = self._get_regime_position_mult(regime_name)
             return regime_name, position_mult
         except Exception as e:

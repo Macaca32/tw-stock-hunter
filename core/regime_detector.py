@@ -481,6 +481,57 @@ def get_regime_position_mult(regime):
     return mult_map.get(regime, 0.6)
 
 
+def detect_regime_from_prices(prices, prev_regime_data=None, config=None):
+    """Detect market regime from pre-loaded price data.
+
+    Phase 17: New entry point for backtest and paper_trader use.
+    Unlike detect_regime() which loads data from files, this accepts
+    pre-filtered price data — essential for avoiding look-ahead bias
+    in backtests where only data on or before date_str should be used.
+
+    Args:
+        prices: Dict {stock_code: [price_entries]} — already filtered to
+                the cutoff date by the caller.
+        prev_regime_data: Previous regime dict (for transition logic).
+                          If None, transition logic is skipped.
+        config: Regime rules config dict. If None, loaded from file.
+
+    Returns:
+        Regime string: 'normal', 'caution', 'stress', 'crisis', 'black_swan', or 'unknown'
+    """
+    if not prices:
+        return "unknown"
+
+    # Load config if not provided
+    if config is None:
+        config_file = Path(__file__).parent.parent / "config" / "regime_rules.json"
+        if config_file.exists():
+            with open(config_file, 'r') as f:
+                config = json.load(f)
+        else:
+            config = {}
+
+    # Initialize corporate action handler
+    corp_handler = None
+    try:
+        from corporate_actions import CorporateActionHandler
+        data_dir = str(Path(__file__).parent.parent / "data")
+        corp_handler = CorporateActionHandler(data_dir)
+    except (ImportError, Exception):
+        pass
+
+    # Get raw regime signal from the provided prices
+    raw_regime = detect_regime_raw(prices, config, corp_handler=corp_handler)
+
+    # Apply transition logic if previous regime data is available
+    if prev_regime_data is not None:
+        regime, days_in_regime = apply_transition_logic(raw_regime, prev_regime_data, config)
+    else:
+        regime = raw_regime
+
+    return regime
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Detect market regime")
