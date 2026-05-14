@@ -749,7 +749,7 @@ def _validate_candidates(candidates, verbose=True):
         return []
     
     try:
-        from core.schemas import Stage1Candidate, ScoreBreakdown
+        from schemas import Stage1Candidate, ScoreBreakdown
     except ImportError as e:
         if verbose:
             print(f"⚠ Pydantic schemas unavailable for validation: {e}")

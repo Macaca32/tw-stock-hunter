@@ -25,7 +25,7 @@ class TelegramAlerts:
         # Phase 15: Holiday calendar for alert suppression on non-trading days
         self.holiday_calendar = None
         try:
-            from core.holiday_calendar import HolidayCalendar
+            from holiday_calendar import HolidayCalendar
             self.holiday_calendar = HolidayCalendar(str(self.data_dir))
         except ImportError:
             pass

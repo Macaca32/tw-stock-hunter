@@ -202,7 +202,7 @@ def validate_ingested_data(results, verbose=True):
     """
     # Import schemas lazily to avoid hard dependency on pydantic
     try:
-        from core.schemas import (
+        from schemas import (
             DailyStockRecord, PERatioRecord, CompanyInfo,
             RevenueRecord, CorporateAction, HolidayEntry,
             batch_validate, validate_daily_stock, normalize_keys,
@@ -321,7 +321,7 @@ def _run_ex_date_validation(data_dir: Path, verbose: bool = False):
     Non-blocking — reports warnings/errors but does not abort the pipeline.
     """
     try:
-        from core.corporate_actions import CorporateActionHandler
+        from corporate_actions import CorporateActionHandler
         handler = CorporateActionHandler(str(data_dir))
         issues = handler.validate_ex_dates()
         if issues and verbose:
