@@ -1,6 +1,6 @@
 {
-  "current_phase": 16,
-  "phase_name": "Pending Z.ai review backlog",
+  "current_phase": 18,
+  "phase_name": "Z.ai remaining findings (RSI, import paths, config mismatches)",
   "started_at": "2026-05-14T05:30:00+08:00",
   "completed_phases": [
     {
@@ -121,10 +121,26 @@
       "completed_at": "2026-05-14T05:30:00+08:00",
       "summary": "Added validate_ex_dates() to corporate_actions.py with Taiwan-aware duplicate detection (date+cash_div+stock_div tuple key). Holiday suppression in telegram_alerts.py for daily alerts, critical/heartbeat bypass. Fixed 7 Z.ai R1 bugs: import paths (3 files), false-positive duplicate detection, type mismatch in is_trading_day(), inverted severity logic, missing return statement, pseudo-code syntax error.",
       "commit": "0afe5f3"
+    },
+    {
+      "phase": 16,
+      "name": "Holiday-aware backtest exits + typhoon/stale-data edge cases",
+      "started_at": "2026-05-14T05:30:00+08:00",
+      "completed_at": "2026-05-15T05:20:00+08:00",
+      "summary": "Refactored _calc_holding_days() to use holiday_calendar.count_trading_days_in_range(). Updated exit loop in run_backtest() for explicit trading-day counting. Added is_trading_day() checks for typhoon/stale-data handling. Workflow shift to Z.ai agent mode (Z.ai codes, I review).",
+      "commit": "5c8e206"
+    },
+    {
+      "phase": 17,
+      "name": "Critical bug fixes — market cap, regime signature, backtest ATR stops, post-holiday gap, deps",
+      "started_at": "2026-05-15T05:00:00+08:00",
+      "completed_at": "2026-05-15T05:25:00+08:00",
+      "summary": "Z.ai agent mode completed all 5 fixes. #5 market cap: close × (paid_in/10) using Taiwan face value NT$10/share, pledge ratio also fixed. #4 regime signature: added detect_regime_from_prices() entry point to regime_detector.py. #8 backtest stops: rewrote with ATR-based logic (2.5×ATR + 0.5×gap buffer), removed random noise simulation. #1 post-holiday off-by-one: proper calendar-day gap calc, threshold adjusted >= 4. #20 deps: added pydantic + yfinance to requirements.txt.",
+      "commit": "e7c7063..0fa9886 (5 commits)"
     }
   ],
-  "notes": "Phase 15 done. Remaining Z.ai items: Step 3 (backtest fills), Step 7b (typhoon/stale-data edge cases).",
-  "rounds_completed": 8,
+  "notes": "Phase 17 done. Phase 18 pending: RSI Wilder smoothing (#9), import path cleanup (#3), config mismatches (#6, #14, #16), pd import fix (#2), performance scan O(n²) (#10)."
+  "rounds_completed": 9,
   "last_zai_round": {
     "round": 6,
     "date": "2026-05-11",
