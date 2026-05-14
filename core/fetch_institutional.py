@@ -21,6 +21,13 @@ except ImportError:
     YF_AVAILABLE = False
     print("⚠️  yfinance not available")
 
+try:
+    import pandas as pd
+    PD_AVAILABLE = True
+except ImportError:
+    PD_AVAILABLE = False
+    print("⚠️  pandas not available")
+
 # Timeout per yfinance request (seconds)
 YF_REQUEST_TIMEOUT = 5
 # Max consecutive failures before giving up on yfinance entirely
@@ -33,6 +40,9 @@ def _try_fetch_yf_institutional(code: str, verbose: bool = False) -> dict | None
     Returns dict with institutional data or None on failure.
     Raises TimeoutError if request takes too long.
     """
+    if not PD_AVAILABLE:
+        return None
+
     import signal
 
     class YfTimeout(Exception):
@@ -97,8 +107,6 @@ def fetch_institutional_data(stock_codes, output_dir=None, verbose=False):
     - Falls back immediately on consecutive failures
     - Uses cached data when available
     """
-    import pandas as pd  # noqa: F811 — needed by _try_fetch_yf_institutional
-
     if not YF_AVAILABLE:
         return {}
 
