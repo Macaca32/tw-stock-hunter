@@ -444,18 +444,15 @@ def get_regime_weights(regime):
         
         regime_config = config.get("regime_weights", {})
         
-        # Phase 3: Map tiered regimes to weight configs
-        if regime == "normal":
-            return regime_config.get("bull_momentum", {})
-        elif regime == "caution":
-            return regime_config.get("choppy_neutral", {})
-        elif regime in ("stress", "crisis"):
-            return regime_config.get("bear_defensive", {})
-        elif regime == "black_swan":
-            # BLACK_SWAN: don't generate any signals
-            return None
-        else:
-            return regime_config.get("choppy_neutral", {})
+        # Phase 18: Use tiered regime names directly as config keys
+        if regime == "black_swan":
+            return None  # BLACK_SWAN: don't generate any signals
+        
+        if regime in regime_config:
+            return regime_config[regime]
+        
+        # Fallback for unknown regime names
+        return regime_config.get("caution", {})
     
     return None
 
