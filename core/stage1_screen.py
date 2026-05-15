@@ -196,7 +196,49 @@ def get_field(stock, chinese_key, english_key, default=""):
     return stock.get(chinese_key, stock.get(english_key, default))
 
 
-def check_hard_filters(stock, company_info, datasets, thresholds, price_history=None):
+def _index_by_stock_code(data_list, code_keys=None):
+    """Build a dict mapping stock_code -> list of matching records.
+
+    Phase 22: Pre-build O(1) lookup index to eliminate repeated linear scans.
+    Same pattern as stage2_deep.py _index_by_stock_code().
+
+    Args:
+        data_list: List of dicts to index.
+        code_keys: Tuple of (chinese_key, english_key) for stock code lookup.
+                   Defaults to ("公司代號", "Code").
+    """
+    if code_keys is None:
+        code_keys = ("公司代號", "Code")
+    index = {}
+    for record in data_list:
+        if isinstance(record, dict):
+            code = record.get(code_keys[0], record.get(code_keys[1], ""))
+            if code:
+                index.setdefault(code, []).append(record)
+    return index
+
+
+def _index_single(data_list, code_keys=None):
+    """Build a dict mapping stock_code -> first matching record.
+
+    Phase 22: For datasets where we only need the first match (PE, revenue, etc.),
+    returns a flat dict instead of lists. Equivalent to _index_by_stock_code()
+    but takes the first record per code for O(1) single-record lookups.
+    """
+    if code_keys is None:
+        code_keys = ("公司代號", "Code")
+    index = {}
+    for record in data_list:
+        if isinstance(record, dict):
+            code = record.get(code_keys[0], record.get(code_keys[1], ""))
+            if code and code not in index:
+                index[code] = record
+    return index
+
+
+def check_hard_filters(stock, company_info, datasets, thresholds, price_history=None,
+                        pledge_index=None, penalty_index=None, sanctions_index=None,
+                        halts_index=None, margin_susp_index=None):
     """Check hard filters - return True if stock PASSES all filters
     
     FIX v2: Stricter filters per z.ai review:
@@ -205,6 +247,9 @@ def check_hard_filters(stock, company_info, datasets, thresholds, price_history=
     - Pledge ratio check (major shareholders pledged >30% = disqualify)
     - Recent penalty check
     - Revenue positivity (YoY revenue growth > -20%)
+
+    Phase 22: Accept pre-built O(1) index dicts instead of scanning full datasets.
+    Falls back to linear scan if indexes not provided (backward compatible).
     """
     stage1_thresh = thresholds["stage1"]
     
@@ -307,68 +352,92 @@ def check_hard_filters(stock, company_info, datasets, thresholds, price_history=
     # Major shareholders with >30% pledged shares = governance red flag
     # Phase 17: Pledged shares (累計質押股數) is in SHARES, not NT$.
     #   Must compare against shares outstanding (= paid_in / 10), not raw paid_in.
-    pledge_data = datasets.get("pledge", [])
-    for p in pledge_data:
-        if get_field(p, "公司代號", "Code", "") == stock_code:
-            pledged = safe_float(get_field(p, "累計質押股數", "total_pledged", ""), 0)
-            # If we have company info, check against shares outstanding
-            if company_info and pledged > 0:
-                paid_in = safe_float(get_field(company_info, "實收資本額", "paid_in_capital", ""), 0)
-                if paid_in > 0:
-                    shares_outstanding = paid_in / 10.0  # Taiwan face value = NT$10/share
-                    pledge_ratio = pledged / shares_outstanding
-                    if pledge_ratio > 0.30:
-                        return False, "high_pledge_risk"
-    
+    # Phase 22: O(1) index lookup instead of O(n) linear scan.
+    pledge_records = pledge_index.get(stock_code, []) if pledge_index is not None else []
+    if not pledge_records:
+        # Fallback: linear scan if index not provided
+        pledge_data = datasets.get("pledge", [])
+        pledge_records = [p for p in pledge_data if get_field(p, "公司代號", "Code", "") == stock_code]
+    for p in pledge_records:
+        pledged = safe_float(get_field(p, "累計質押股數", "total_pledged", ""), 0)
+        # If we have company info, check against shares outstanding
+        if company_info and pledged > 0:
+            paid_in = safe_float(get_field(company_info, "實收資本額", "paid_in_capital", ""), 0)
+            if paid_in > 0:
+                shares_outstanding = paid_in / 10.0  # Taiwan face value = NT$10/share
+                pledge_ratio = pledged / shares_outstanding
+                if pledge_ratio > 0.30:
+                    return False, "high_pledge_risk"
+
     # === PENALTY CHECK (BINARY - ANY TWSE/FSC penalty = DISQUALIFY) ===
     # FIX v3: No sliding scale. There's no "minor financial fraud."
-    penalty_data = datasets.get("penalties", [])
-    for p in penalty_data:
-        if get_field(p, "公司代號", "Code", "") == stock_code:
-            date_str = get_field(p, "處分日期", "penalty_date", "")
-            if date_str:
-                try:
-                    penalty_date = datetime.strptime(str(date_str)[:8], "%Y%m%d")
-                    days_ago = (datetime.now() - penalty_date).days
-                    # FIX v3: 365-day lookback, ANY penalty = disqualify
-                    if days_ago < 365:
-                        return False, "recent_penalty"
-                except:
-                    pass
-    
-    # Check sanctions
-    sanctions = datasets.get("sanctions", [])
-    for s in sanctions:
-        if get_field(s, "證券代號", "Code", "") == stock_code:
+    # Phase 22: O(1) index lookup instead of O(n) linear scan.
+    penalty_records = penalty_index.get(stock_code, []) if penalty_index is not None else []
+    if not penalty_records:
+        penalty_data = datasets.get("penalties", [])
+        penalty_records = [p for p in penalty_data if get_field(p, "公司代號", "Code", "") == stock_code]
+    for p in penalty_records:
+        date_str = get_field(p, "處分日期", "penalty_date", "")
+        if date_str:
+            try:
+                penalty_date = datetime.strptime(str(date_str)[:8], "%Y%m%d")
+                days_ago = (datetime.now() - penalty_date).days
+                # FIX v3: 365-day lookback, ANY penalty = disqualify
+                if days_ago < 365:
+                    return False, "recent_penalty"
+            except (ValueError, AttributeError):
+                pass
+
+    # Check sanctions — Phase 22: O(1) index lookup
+    if sanctions_index is not None:
+        if stock_code in sanctions_index:
             return False, "sanctioned"
-    
-    # Check halts
-    halts = datasets.get("halts", [])
-    for h in halts:
-        if get_field(h, "證券代號", "Code", "") == stock_code:
+    else:
+        sanctions = datasets.get("sanctions", [])
+        for s in sanctions:
+            if get_field(s, "證券代號", "Code", "") == stock_code:
+                return False, "sanctioned"
+
+    # Check halts — Phase 22: O(1) index lookup
+    if halts_index is not None:
+        if stock_code in halts_index:
             return False, "trading_halt"
-    
-    # Check margin suspension
-    margin_susp = datasets.get("margin_susp", [])
-    for m in margin_susp:
-        if get_field(m, "證券代號", "Code", "") == stock_code:
+    else:
+        halts = datasets.get("halts", [])
+        for h in halts:
+            if get_field(h, "證券代號", "Code", "") == stock_code:
+                return False, "trading_halt"
+
+    # Check margin suspension — Phase 22: O(1) index lookup
+    if margin_susp_index is not None:
+        if stock_code in margin_susp_index:
             return False, "margin_suspended"
-    
+    else:
+        margin_susp = datasets.get("margin_susp", [])
+        for m in margin_susp:
+            if get_field(m, "證券代號", "Code", "") == stock_code:
+                return False, "margin_suspended"
+
     return True, "pass"
 
 
-def score_revenue_momentum(stock_code, revenue_data, weights):
+def score_revenue_momentum(stock_code, revenue_data, weights, revenue_index=None):
     """Score revenue momentum (0-100)
     
     Revenue data uses Chinese keys:
       公司代號, 營業收入-當月營收, 營業收入-去年同月增減(%), 營業收入-上月比較增減(%)
+
+    Phase 22: Accept pre-built revenue_index for O(1) lookup.
     """
-    # Find stock in revenue data (uses 公司代號)
-    stock_rev = None
-    for r in revenue_data:
-        if get_field(r, "公司代號", "Code", "") == stock_code:
-            stock_rev = r
-            break
+    # Phase 22: O(1) index lookup instead of O(n) linear scan
+    if revenue_index is not None:
+        stock_rev = revenue_index.get(stock_code)
+    else:
+        stock_rev = None
+        for r in revenue_data:
+            if get_field(r, "公司代號", "Code", "") == stock_code:
+                stock_rev = r
+                break
     
     if not stock_rev:
         return 25  # Neutral if no data
@@ -411,13 +480,20 @@ def score_revenue_momentum(stock_code, revenue_data, weights):
         return 25
 
 
-def score_profitability(stock_code, pe_data):
-    """Score profitability based on P/E and available metrics (0-100)"""
-    stock_pe = None
-    for p in pe_data:
-        if get_field(p, "證券代號", "Code", "") == stock_code:
-            stock_pe = p
-            break
+def score_profitability(stock_code, pe_data, pe_index=None):
+    """Score profitability based on P/E and available metrics (0-100)
+
+    Phase 22: Accept pre-built pe_index for O(1) lookup.
+    """
+    # Phase 22: O(1) index lookup instead of O(n) linear scan
+    if pe_index is not None:
+        stock_pe = pe_index.get(stock_code)
+    else:
+        stock_pe = None
+        for p in pe_data:
+            if get_field(p, "證券代號", "Code", "") == stock_code:
+                stock_pe = p
+                break
     
     if not stock_pe:
         return 25
@@ -445,14 +521,20 @@ def score_profitability(stock_code, pe_data):
         return 25
 
 
-def score_valuation(stock_code, pe_data):
-    """Score valuation (0-100)"""
-    # Similar to profitability but focuses on value metrics
-    stock_pe = None
-    for p in pe_data:
-        if get_field(p, "證券代號", "Code", "") == stock_code:
-            stock_pe = p
-            break
+def score_valuation(stock_code, pe_data, pe_index=None):
+    """Score valuation (0-100)
+
+    Phase 22: Accept pre-built pe_index for O(1) lookup.
+    """
+    # Phase 22: O(1) index lookup instead of O(n) linear scan
+    if pe_index is not None:
+        stock_pe = pe_index.get(stock_code)
+    else:
+        stock_pe = None
+        for p in pe_data:
+            if get_field(p, "證券代號", "Code", "") == stock_code:
+                stock_pe = p
+                break
     
     if not stock_pe:
         return 25
@@ -497,22 +579,29 @@ def score_valuation(stock_code, pe_data):
         return 25
 
 
-def score_institutional_flow(stock_code, flow_data, margin_data):
+def score_institutional_flow(stock_code, flow_data, margin_data,
+                           flow_index=None, margin_index=None):
     """Score institutional flow (0-100)
     
     Uses margin trading data as proxy since institutional flow API is broken.
     Margin data has Chinese keys: 股票代號, 融資買進, 融券賣出, etc.
+
+    Phase 22: Accept pre-built flow_index and margin_index for O(1) lookup.
     """
     # Handle case where flow_data is not a list (HTML response or empty)
     if not isinstance(flow_data, list):
         flow_data = []
     
-    # Try flow data first
+    # Try flow data first — Phase 22: O(1) index lookup
     stock_flow = None
-    for f in flow_data:
-        if isinstance(f, dict) and get_field(f, "證券代號", "Code", "") == stock_code:
-            stock_flow = f
-            break
+    if flow_index is not None:
+        records = flow_index.get(stock_code, [])
+        stock_flow = records[0] if records else None
+    else:
+        for f in flow_data:
+            if isinstance(f, dict) and get_field(f, "證券代號", "Code", "") == stock_code:
+                stock_flow = f
+                break
     
     if stock_flow:
         try:
@@ -535,13 +624,17 @@ def score_institutional_flow(stock_code, flow_data, margin_data):
         except:
             pass
     
-    # Fallback: use margin data as proxy
-    if isinstance(margin_data, list):
+    # Fallback: use margin data as proxy — Phase 22: O(1) index lookup
+    if isinstance(margin_data, list) or margin_index is not None:
         stock_margin = None
-        for m in margin_data:
-            if isinstance(m, dict) and get_field(m, "股票代號", "Code", "") == stock_code:
-                stock_margin = m
-                break
+        if margin_index is not None:
+            records = margin_index.get(stock_code, [])
+            stock_margin = records[0] if records else None
+        else:
+            for m in margin_data:
+                if isinstance(m, dict) and get_field(m, "股票代號", "Code", "") == stock_code:
+                    stock_margin = m
+                    break
         
         if stock_margin:
             try:
@@ -869,7 +962,25 @@ def run_stage1(date_str=None, verbose=False):
     for c in company_data:
         code = get_field(c, "公司代號", "Code", "")
         company_lookup[code] = c
-    
+
+    # Phase 22: Pre-build O(1) index dicts for all lookup-heavy datasets.
+    # Eliminates O(n) linear scans per stock in check_hard_filters() and
+    # all scoring functions. Same pattern as stage2_deep.py.
+    pe_index = _index_single(pe_data, code_keys=("證券代號", "Code"))
+    revenue_index = _index_single(revenue_data, code_keys=("公司代號", "Code"))
+    flow_index = _index_by_stock_code(flow_data, code_keys=("證券代號", "Code"))
+    margin_index = _index_by_stock_code(margin_data, code_keys=("股票代號", "Code"))
+    pledge_index = _index_by_stock_code(datasets.get("pledge", []), code_keys=("公司代號", "Code"))
+    penalty_index = _index_by_stock_code(datasets.get("penalties", []), code_keys=("公司代號", "Code"))
+    sanctions_index = _index_by_stock_code(datasets.get("sanctions", []), code_keys=("證券代號", "Code"))
+    halts_index = _index_by_stock_code(datasets.get("halts", []), code_keys=("證券代號", "Code"))
+    margin_susp_index = _index_by_stock_code(datasets.get("margin_susp", []), code_keys=("證券代號", "Code"))
+    daily_index = _index_single(daily_data, code_keys=("證券代號", "Code"))
+    logger.info(
+        "Phase 22: Built index dicts (pe=%d, revenue=%d, flow=%d, margin=%d)",
+        len(pe_index), len(revenue_index), len(flow_index), len(margin_index),
+    )
+
     candidates = []
     watchlist = []
     rejected = []
@@ -887,18 +998,26 @@ def run_stage1(date_str=None, verbose=False):
         company_info = company_lookup.get(code)
         
         # Hard filters (pass company_info for market cap calc, price_history for ADV)
-        passes, reason = check_hard_filters(stock, company_info, datasets, thresholds, price_history=price_history)
+        # Phase 22: Pass pre-built O(1) index dicts
+        passes, reason = check_hard_filters(
+            stock, company_info, datasets, thresholds, price_history=price_history,
+            pledge_index=pledge_index, penalty_index=penalty_index,
+            sanctions_index=sanctions_index, halts_index=halts_index,
+            margin_susp_index=margin_susp_index,
+        )
         if not passes:
             rejected.append({"code": code, "name": name, "reason": reason})
             continue
         
-        # Score each dimension
+        # Score each dimension — Phase 22: Pass O(1) index dicts
         scores = {
-            "revenue": score_revenue_momentum(code, revenue_data, weights),
-            "profitability": score_profitability(code, pe_data),
-            "valuation": score_valuation(code, pe_data),
-            "flow": score_institutional_flow(code, flow_data, margin_data),
-            "momentum": score_technical_momentum(code, daily_data, price_history=price_history)
+            "revenue": score_revenue_momentum(code, revenue_data, weights, revenue_index=revenue_index),
+            "profitability": score_profitability(code, pe_data, pe_index=pe_index),
+            "valuation": score_valuation(code, pe_data, pe_index=pe_index),
+            "flow": score_institutional_flow(code, flow_data, margin_data,
+                                             flow_index=flow_index, margin_index=margin_index),
+            "momentum": score_technical_momentum(code, daily_data, price_history=price_history,
+                                                daily_index=daily_index)
         }
         
         # Weighted composite
