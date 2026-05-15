@@ -12,6 +12,7 @@ yfinance dropped reliable support for Taiwan stocks. This module now:
 import json
 import signal
 import time
+import warnings
 from pathlib import Path
 
 try:
@@ -32,6 +33,30 @@ except ImportError:
 YF_REQUEST_TIMEOUT = 5
 # Max consecutive failures before giving up on yfinance entirely
 YF_MAX_CONSECUTIVE_FAILURES = 5
+
+
+def _validate_yf_dataframe(df, expected_columns, context="", verbose=False):
+    """Validate a yfinance DataFrame has expected structure.
+
+    Phase 20: Catch malformed DataFrame responses before processing.
+    Returns the DataFrame if valid, None otherwise.
+    """
+    if df is None or df.empty:
+        return None
+
+    # Check that expected columns exist
+    missing = [c for c in expected_columns if c not in df.columns]
+    if missing and verbose:
+        warnings.warn(f"yfinance {context}: missing columns {missing}, have {list(df.columns)[:8]}")
+
+    # Check for completely null columns (yfinance sometimes returns empty DataFrames with columns)
+    non_null_cols = [c for c in df.columns if df[c].notna().any()]
+    if not non_null_cols:
+        if verbose:
+            print(f"    ⚠ yfinance {context}: all columns are null")
+        return None
+
+    return df
 
 
 def _try_fetch_yf_institutional(code: str, verbose: bool = False) -> dict | None:
@@ -60,7 +85,12 @@ def _try_fetch_yf_institutional(code: str, verbose: bool = False) -> dict | None
         inst_holders = ticker.institutional_holders
         major_holders = ticker.major_holders
 
-        if inst_holders is None or inst_holders.empty:
+        # Phase 20: Validate yfinance DataFrames before processing
+        inst_holders = _validate_yf_dataframe(
+            inst_holders, ["Holder", "Shares", "Value"],
+            context=f"{code}/institutional", verbose=verbose
+        )
+        if inst_holders is None:
             return None
 
         total_pct = inst_holders.get("pctHeld", pd.Series()).sum() if "pctHeld" in inst_holders.columns else 0
@@ -83,11 +113,17 @@ def _try_fetch_yf_institutional(code: str, verbose: bool = False) -> dict | None
         }
 
         if major_holders is not None and not major_holders.empty:
-            try:
-                result["insider_pct"] = float(major_holders.loc["Insiders Percent Held", "Value"])
-                result["institutional_pct"] = float(major_holders.loc["Institutions Percent Held", "Value"])
-            except (KeyError, TypeError):
-                pass
+            # Phase 20: Validate major_holders DataFrame before accessing
+            validated_major = _validate_yf_dataframe(
+                major_holders, ["Value"],
+                context=f"{code}/major_holders", verbose=verbose
+            )
+            if validated_major is not None:
+                try:
+                    result["insider_pct"] = float(validated_major.loc["Insiders Percent Held", "Value"])
+                    result["institutional_pct"] = float(validated_major.loc["Institutions Percent Held", "Value"])
+                except (KeyError, TypeError):
+                    pass
 
         return result
     except (YfTimeout, Exception) as e:

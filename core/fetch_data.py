@@ -8,6 +8,7 @@ import requests
 import time
 import json
 import sys
+import warnings
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -20,6 +21,63 @@ TIMEOUT = 15
 MAX_RETRIES = 3  # retries per endpoint
 RETRY_BACKOFF = 2  # exponential backoff multiplier
 BATCH_DELAY = 2.0  # delay between batches of 5 requests (rate limit protection)
+
+
+def _validate_twse_response(data, endpoint_name, verbose=False):
+    """Validate TWSE API response structure.
+
+    Phase 20: Catch malformed responses at the ingestion boundary
+    instead of letting them crash downstream modules. Returns the
+    validated data on success, or None if the response is unusable.
+    Warnings are logged for suspicious but not fatal issues.
+    """
+    if data is None:
+        if verbose:
+            print(f"    ⚠ {endpoint_name}: response is None")
+        return None
+
+    # Reject HTML responses that slipped through content-type checks
+    if isinstance(data, str):
+        if "<!DOCTYPE" in data[:100] or "<html" in data[:100].lower():
+            if verbose:
+                print(f"    ⚠ {endpoint_name}: received HTML instead of JSON")
+            return None
+        # Some TWSE endpoints return error strings
+        if verbose:
+            print(f"    ⚠ {endpoint_name}: unexpected string response ({len(data)} chars)")
+        return None
+
+    # TWSE returns either a list of records or a dict with 'data' key
+    if isinstance(data, dict):
+        # Check for known error structures
+        if "error" in data or "Error" in data:
+            err_msg = data.get("error", data.get("Error", "unknown"))
+            if verbose:
+                print(f"    ⚠ {endpoint_name}: API error — {err_msg}")
+            return None
+
+        # Some TWSE endpoints wrap results in {"data": [...]}
+        if "data" in data and isinstance(data["data"], list):
+            return data["data"]
+
+        # Dict with record fields is fine (single-record endpoints)
+        return data
+
+    if isinstance(data, list):
+        # Empty list is valid (e.g., holiday with no trades)
+        if len(data) > 0 and isinstance(data[0], dict):
+            # Spot-check first record for expected string fields
+            first = data[0]
+            has_chinese_fields = any(k for k in first if any('\u4e00' <= c <= '\u9fff' for c in k))
+            has_english_fields = any(k.isascii() and not k.startswith('_') for k in first)
+            if not has_chinese_fields and not has_english_fields:
+                warnings.warn(f"TWSE {endpoint_name}: first record has unexpected field names: {list(first.keys())[:5]}")
+        return data
+
+    if verbose:
+        print(f"    ⚠ {endpoint_name}: unexpected type {type(data).__name__}")
+    return None
+
 
 # All endpoints to fetch
 ENDPOINTS = {
@@ -71,10 +129,16 @@ def fetch_endpoint(name, path, params=None, verbose=False):
                 if 'application/json' in content_type or r.text.strip().startswith('{') or r.text.strip().startswith('['):
                     try:
                         data = r.json()
+                        # Phase 20: Validate response structure at ingestion boundary
+                        validated = _validate_twse_response(data, name, verbose=verbose)
+                        if validated is None:
+                            if verbose:
+                                print(f"    ⚠ {name}: response validation failed")
+                            return []
                         if verbose:
-                            count = len(data) if isinstance(data, list) else 'OK'
+                            count = len(validated) if isinstance(validated, list) else 'OK'
                             print(f"    ✓ {name}: {count} records")
-                        return data
+                        return validated
                     except json.JSONDecodeError:
                         if verbose:
                             print(f"    ⚠ {name}: JSON decode failed")

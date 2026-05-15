@@ -9,6 +9,7 @@ Phase 2: Integrates backward price adjustment for corporate actions.
 import json
 import sys
 import time
+import warnings
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -30,6 +31,67 @@ BASE = "https://openapi.twse.com.tw/v1"
 ENDPOINT = "/exchangeReport/STOCK_DAY_ALL"
 RATE_LIMIT = 0.3
 TIMEOUT = 15
+
+
+def _validate_twse_history_response(data, date_str, verbose=False):
+    """Validate TWSE historical data API response.
+
+    Phase 20: Catch malformed responses at ingestion boundary.
+    Returns validated list of records, or None if unusable.
+    """
+    if data is None:
+        if verbose:
+            print(f"    ⚠ {date_str}: response is None")
+        return None
+
+    # Reject HTML that slipped through
+    if isinstance(data, str):
+        if "<!DOCTYPE" in data[:100] or "<html" in data[:100].lower():
+            if verbose:
+                print(f"    ⚠ {date_str}: received HTML instead of JSON")
+            return None
+        if verbose:
+            print(f"    ⚠ {date_str}: unexpected string response")
+        return None
+
+    # Reject dicts with error keys
+    if isinstance(data, dict):
+        if "error" in data or "Error" in data:
+            err_msg = data.get("error", data.get("Error", "unknown"))
+            if verbose:
+                print(f"    ⚠ {date_str}: API error — {err_msg}")
+            return None
+        # Unwrap {"data": [...]} if present
+        if "data" in data and isinstance(data["data"], list):
+            data = data["data"]
+        else:
+            if verbose:
+                print(f"    ⚠ {date_str}: unexpected dict structure — {list(data.keys())[:5]}")
+            return None
+
+    # Expected: list of stock records
+    if not isinstance(data, list):
+        if verbose:
+            print(f"    ⚠ {date_str}: expected list, got {type(data).__name__}")
+        return None
+
+    # Empty list is valid (holiday)
+    if len(data) == 0:
+        return data
+
+    # Spot-check first record structure
+    if isinstance(data[0], dict):
+        first = data[0]
+        has_expected_fields = (
+            "Code" in first or "證券代號" in first or
+            "ClosingPrice" in first or "收盤價" in first
+        )
+        if not has_expected_fields:
+            warnings.warn(
+                f"TWSE history {date_str}: first record missing expected fields: "
+                f"{list(first.keys())[:6]}"
+            )
+    return data
 
 
 def safe_float(val, default=0.0):
@@ -74,15 +136,20 @@ def fetch_from_twse(dates, output_dir=None, verbose=False):
             
             if r.status_code == 200:
                 data = r.json()
-                if isinstance(data, list) and data:
-                    all_data[date_str] = data
+                # Phase 20: Validate response structure at ingestion boundary
+                validated = _validate_twse_history_response(data, date_str, verbose=verbose)
+                if validated is None:
                     if verbose:
-                        print(f"    ✓ {len(data)} stocks")
+                        print(f"    ⚠ {date_str}: response validation failed")
+                elif isinstance(validated, list) and validated:
+                    all_data[date_str] = validated
+                    if verbose:
+                        print(f"    ✓ {len(validated)} stocks")
                     
                     # Save individual file
                     filepath = output_dir / f"historical_{date_str}.json"
                     with open(filepath, 'w', encoding='utf-8') as f:
-                        json.dump(data, f, ensure_ascii=False)
+                        json.dump(validated, f, ensure_ascii=False)
                 else:
                     if verbose:
                         print(f"    ⚠ No data (holiday?)")
