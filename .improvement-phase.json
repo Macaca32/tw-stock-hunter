@@ -1,7 +1,7 @@
 {
-  "current_phase": 22,
+  "current_phase": 23,
   "phase_name": "TBD — awaiting Jerry's direction on next priority",
-  "started_at": "2026-05-15T21:30:00+08:00",
+  "started_at": "2026-05-15T22:30:00+08:00",
   "completed_phases": [
     {
       "phase": 0,
@@ -169,6 +169,14 @@
       "completed_at": "2026-05-15T21:30:00+08:00",
       "summary": "Z.ai agent mode completed both fixes. #22 unit tests: 475-line test_core.py with pytest covering RSI Wilder smoothing, backward price adjustment, weight smoothing boundary conditions, holiday calendar trading-day counting, and paper trader holding-days calculation. All inline data, no API calls. conftest.py provides shared fixtures. #23 structured logging: new core/logging_config.py with setup_logging(verbose=False, log_file=None, quiet=False), suppresses noisy third-party loggers (urllib3, requests, yfinance). Replaced print() statements in fetch_data, fetch_history, stage1_screen, stage2_deep.",
       "commit": "9b500ee..f6cc392 (2 commits)"
+    },
+    {
+      "phase": 22,
+      "name": "Full repo review — 8 bugs found and fixed across core modules",
+      "started_at": "2026-05-15T22:00:00+08:00",
+      "completed_at": "2026-05-15T22:30:00+08:00",
+      "summary": "Fresh full review of all source files in core/, learning/, config/. Found and fixed 8 bugs: (1) stage2_deep.py None score comparison crash in red-flag checks, (2) holiday_calendar.py half-day sessions treated as non-trading days, (3) regime_detector.py calc_volatility missing corp_handler param, (4) stage1_screen.py momentum scoring used raw close instead of adj_close, (5) _is_tpex range inconsistency between stage1 and paper_trader, (6) corporate_actions.py adjust_price_for_dividend ignored stock dividends, (7) remaining print() replaced with logging in 7 core modules, (8) deduplicated ROC date conversion functions.",
+      "commit": "56475c9..4cc65e1 (7 commits)"
     }
   ],
   "notes": "Phase 20 done. Phase 21 pending: SQLite migration (#21), unit tests (#22), logging instead of print (#23).",
