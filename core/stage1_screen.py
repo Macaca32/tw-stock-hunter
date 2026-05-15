@@ -604,8 +604,8 @@ def score_technical_momentum(stock_code, daily_data, pe_data=None, price_history
 def _score_momentum_with_history(history):
     """Score momentum with 20+ days of price history"""
     try:
-        closes = [h["close"] for h in history[-20:]]
-        volumes = [h["volume"] for h in history[-20:]]
+        closes = [h.get("adj_close", h.get("close", 0)) for h in history[-20:]]
+        volumes = [h.get("adj_volume", h.get("volume", 0)) for h in history[-20:]]
         
         if not closes or closes[0] == 0:
             return 25
@@ -680,7 +680,7 @@ def _score_momentum_with_history(history):
 def _score_momentum_short_history(history):
     """Score momentum with 5-19 days of price history"""
     try:
-        closes = [h["close"] for h in history]
+        closes = [h.get("adj_close", h.get("close", 0)) for h in history]
         
         if not closes or closes[0] == 0:
             return 25
