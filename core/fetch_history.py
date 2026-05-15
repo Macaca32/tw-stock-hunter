@@ -9,9 +9,12 @@ Phase 2: Integrates backward price adjustment for corporate actions.
 import json
 import sys
 import time
+import logging
 import warnings
 from datetime import datetime, timedelta
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # Add parent dir for imports
 sys.path.insert(0, str(Path(__file__).parent))
@@ -22,7 +25,7 @@ try:
     YF_AVAILABLE = True
 except ImportError:
     YF_AVAILABLE = False
-    print("⚠️  yfinance not available - install with: pip install yfinance")
+    logger.warning("yfinance not available - install with: pip install yfinance")
 
 from corporate_actions import CorporateActionHandler
 from holiday_calendar import HolidayCalendar, get_holiday_gaps as _get_holiday_gaps_fn, is_trading_day as _is_trading_day_fn
@@ -40,39 +43,33 @@ def _validate_twse_history_response(data, date_str, verbose=False):
     Returns validated list of records, or None if unusable.
     """
     if data is None:
-        if verbose:
-            print(f"    ⚠ {date_str}: response is None")
+        logger.warning("%s: response is None", date_str)
         return None
 
     # Reject HTML that slipped through
     if isinstance(data, str):
         if "<!DOCTYPE" in data[:100] or "<html" in data[:100].lower():
-            if verbose:
-                print(f"    ⚠ {date_str}: received HTML instead of JSON")
+            logger.warning("%s: received HTML instead of JSON", date_str)
             return None
-        if verbose:
-            print(f"    ⚠ {date_str}: unexpected string response")
+        logger.warning("%s: unexpected string response", date_str)
         return None
 
     # Reject dicts with error keys
     if isinstance(data, dict):
         if "error" in data or "Error" in data:
             err_msg = data.get("error", data.get("Error", "unknown"))
-            if verbose:
-                print(f"    ⚠ {date_str}: API error — {err_msg}")
+            logger.warning("%s: API error — %s", date_str, err_msg)
             return None
         # Unwrap {"data": [...]} if present
         if "data" in data and isinstance(data["data"], list):
             data = data["data"]
         else:
-            if verbose:
-                print(f"    ⚠ {date_str}: unexpected dict structure — {list(data.keys())[:5]}")
+            logger.warning("%s: unexpected dict structure — %s", date_str, list(data.keys())[:5])
             return None
 
     # Expected: list of stock records
     if not isinstance(data, list):
-        if verbose:
-            print(f"    ⚠ {date_str}: expected list, got {type(data).__name__}")
+        logger.warning("%s: expected list, got %s", date_str, type(data).__name__)
         return None
 
     # Empty list is valid (holiday)
@@ -123,8 +120,7 @@ def fetch_from_twse(dates, output_dir=None, verbose=False):
     for date_str in dates:
         tw_date = date_str.replace("-", "")
         
-        if verbose:
-            print(f"  → Fetching {date_str}...")
+        logger.debug("Fetching %s...", date_str)
         
         try:
             import requests
@@ -139,26 +135,21 @@ def fetch_from_twse(dates, output_dir=None, verbose=False):
                 # Phase 20: Validate response structure at ingestion boundary
                 validated = _validate_twse_history_response(data, date_str, verbose=verbose)
                 if validated is None:
-                    if verbose:
-                        print(f"    ⚠ {date_str}: response validation failed")
+                    logger.warning("%s: response validation failed", date_str)
                 elif isinstance(validated, list) and validated:
                     all_data[date_str] = validated
-                    if verbose:
-                        print(f"    ✓ {len(validated)} stocks")
+                    logger.info("%s: %d stocks", date_str, len(validated))
                     
                     # Save individual file
                     filepath = output_dir / f"historical_{date_str}.json"
                     with open(filepath, 'w', encoding='utf-8') as f:
                         json.dump(validated, f, ensure_ascii=False)
                 else:
-                    if verbose:
-                        print(f"    ⚠ No data (holiday?)")
+                    logger.warning("%s: No data (holiday?)", date_str)
             else:
-                if verbose:
-                    print(f"    ⚠ HTTP {r.status_code}")
+                logger.warning("%s: HTTP %d", date_str, r.status_code)
         except Exception as e:
-            if verbose:
-                print(f"    ✗ Error: {e}")
+            logger.error("%s: Error: %s", date_str, e)
         
         time.sleep(RATE_LIMIT)
     
@@ -181,8 +172,7 @@ def fetch_from_yfinance(stock_codes, dates, output_dir=None, verbose=False):
     # Convert codes to yfinance symbols
     symbols = [f"{code}.TW" for code in stock_codes]
 
-    if verbose:
-        print(f"  → Fetching {len(symbols)} stocks from yfinance (fallback, may be slow)...")
+    logger.debug("Fetching %d stocks from yfinance (fallback, may be slow)...", len(symbols))
 
     all_data = {}
 
@@ -213,8 +203,7 @@ def fetch_from_yfinance(stock_codes, dates, output_dir=None, verbose=False):
                     auto_adjust=True
                 )
             except _YfTimeout:
-                if verbose:
-                    print(f"    ✗ Batch {i // batch_size + 1} timed out after {total_timeout}s")
+                logger.error("Batch %d timed out after %ds", i // batch_size + 1, total_timeout)
                 return all_data
             finally:
                 signal.alarm(0)
@@ -255,11 +244,9 @@ def fetch_from_yfinance(stock_codes, dates, output_dir=None, verbose=False):
             time.sleep(1)  # Rate limit
 
         except Exception as e:
-            if verbose:
-                print(f"    ✗ Batch error: {e}")
+            logger.error("Batch error: %s", e)
 
-    if verbose:
-        print(f"  ✓ Fetched {sum(len(v) for v in all_data.values())} stock-day records")
+    logger.info("Fetched %d stock-day records from yfinance", sum(len(v) for v in all_data.values()))
 
     return all_data
 
@@ -282,13 +269,12 @@ def get_trading_dates(start_date, end_date, verbose=False):
 
         # Show holiday gaps for awareness
         gaps = cal.get_holiday_gaps(start_iso, end_iso)
-        if gaps and verbose:
-            print(f"   📅 Holiday gaps detected: {len(gaps)}")
+        if gaps:
+            logger.info("Holiday gaps detected: %d", len(gaps))
             for g in gaps:
-                print(f"      {g['start']} → {g['end']} ({g['length']} days): {g.get('reason', '?')}")
+                logger.info("  %s → %s (%d days): %s", g['start'], g['end'], g['length'], g.get('reason', '?'))
     except Exception as e:
-        if verbose:
-            print(f"   ⚠ Holiday calendar unavailable ({e}), using weekend-only filter")
+        logger.warning("Holiday calendar unavailable (%s), using weekend-only filter", e)
         # Fallback to weekend-only filter
         dates = []
         current = start_date
@@ -314,8 +300,7 @@ def build_price_history(date_str=None, lookback_days=365, verbose=False):
     
     dates = get_trading_dates(start_date, end_date, verbose)
     
-    if verbose:
-        print(f"📅 Building price history for {len(dates)} trading days")
+    logger.info("Building price history for %d trading days", len(dates))
     
     # Check cache first
     data_dir = Path(__file__).parent.parent / "data"
@@ -325,22 +310,20 @@ def build_price_history(date_str=None, lookback_days=365, verbose=False):
         if filepath.exists():
             cached.append(d)
     
-    if cached and verbose:
-        print(f"   📦 {len(cached)} days cached")
+    if cached:
+        logger.info("%d days cached", len(cached))
     
     # Fetch missing dates
     to_fetch = [d for d in dates if d not in cached]
     if to_fetch:
-        if verbose:
-            print(f"   📡 Fetching {len(to_fetch)} new days")
+        logger.info("Fetching %d new days", len(to_fetch))
         
         # Try TWSE first
         twse_data = fetch_from_twse(to_fetch, output_dir=data_dir, verbose=verbose)
         
         # If TWSE failed or returned duplicate data, fall back to yfinance
         if not twse_data or all(len(v) == 0 for v in twse_data.values()):
-            if verbose:
-                print("   ⚠️  TWSE returned no data, falling back to yfinance")
+            logger.warning("TWSE returned no data, falling back to yfinance")
             
             # Get stock codes from existing data
             stock_codes = []
@@ -385,13 +368,11 @@ def build_price_history(date_str=None, lookback_days=365, verbose=False):
                     })
 
     # Phase 2: Apply backward adjustment for corporate actions
-    if verbose:
-        print(f"   🔄 Applying backward adjustment for corporate actions...")
+    logger.info("Applying backward adjustment for corporate actions...")
     
     ca_handler = CorporateActionHandler(data_dir=str(data_dir))
     ca_summary = ca_handler.summary()
-    if verbose:
-        print(f"      Corporate actions loaded: {ca_summary['twt49u_actions']} (TWT49U) + {ca_summary['declaration_actions']} (declarations)")
+    logger.info("Corporate actions loaded: %s (TWT49U) + %s (declarations)", ca_summary['twt49u_actions'], ca_summary['declaration_actions'])
     
     adjusted_prices = {}
     adjusted_count = 0
@@ -402,8 +383,7 @@ def build_price_history(date_str=None, lookback_days=365, verbose=False):
         if any(p.get("cumulative_factor", 1.0) != 1.0 for p in adjusted):
             adjusted_count += 1
     
-    if verbose:
-        print(f"      Adjusted {adjusted_count}/{len(adjusted_prices)} stocks had corporate actions in range")
+    logger.info("Adjusted %d/%d stocks had corporate actions in range", adjusted_count, len(adjusted_prices))
     
     all_prices = adjusted_prices
     
@@ -412,10 +392,9 @@ def build_price_history(date_str=None, lookback_days=365, verbose=False):
     with open(history_file, 'w', encoding='utf-8') as f:
         json.dump(all_prices, f, ensure_ascii=False)
     
-    if verbose:
-        print(f"\n✅ Price history built for {len(all_prices)} stocks")
-        print(f"   Saved to data/price_history.json (backward-adjusted)")
-        print(f"   Note: Prices include 'adj_close' field for corporate-action-adjusted prices")
+    logger.info("Price history built for %d stocks", len(all_prices))
+    logger.info("Saved to data/price_history.json (backward-adjusted)")
+    logger.info("Note: Prices include 'adj_close' field for corporate-action-adjusted prices")
     
     return all_prices
 

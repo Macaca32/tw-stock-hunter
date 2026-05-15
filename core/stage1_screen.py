@@ -5,8 +5,11 @@ Filters full TWSE universe by hard filters + composite scoring
 """
 
 import json
+import logging
 from datetime import datetime, timedelta
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 def load_data(date_str=None):
@@ -29,7 +32,7 @@ def load_data(date_str=None):
             with open(filepath, 'r', encoding='utf-8') as f:
                 datasets[name] = json.load(f)
         else:
-            print(f"⚠ Missing {name}_{date_str}.json")
+            logger.warning("Missing %s_%s.json", name, date_str)
     
     # Optional datasets
     for name in ["margin", "announce", "pledge", "sanctions", "halts", "margin_susp", "dividends", "major_sh"]:
@@ -787,8 +790,7 @@ def _validate_candidates(candidates, verbose=True):
     try:
         from schemas import Stage1Candidate, ScoreBreakdown
     except ImportError as e:
-        if verbose:
-            print(f"⚠ Pydantic schemas unavailable for validation: {e}")
+        logger.warning("Pydantic schemas unavailable for validation: %s", e)
         return candidates  # Return raw data without validation
     
     valid = []
@@ -818,12 +820,11 @@ def _validate_candidates(candidates, verbose=True):
             valid.append(validated.model_dump())
         except Exception as e:
             invalid_count += 1
-            if verbose and invalid_count <= 3:  # Log first few, not all
+            if invalid_count <= 3:  # Log first few, not all
                 code = c.get("code", "??")
-                print(f"   ⚠ Candidate validation failed for {code}: {e}")
+                logger.warning("Candidate validation failed for %s: %s", code, e)
     
-    if verbose:
-        print(f"📋 Stage 1 output validated: {len(valid)}/{len(candidates)} valid ({invalid_count} excluded)")
+    logger.info("Stage 1 output validated: %d/%d valid (%d excluded)", len(valid), len(candidates), invalid_count)
     
     return valid
 
@@ -847,8 +848,7 @@ def run_stage1(date_str=None, verbose=False):
         try:
             with open(history_file, 'r', encoding='utf-8') as f:
                 price_history = json.load(f)
-            if verbose:
-                print(f"   📦 Price history loaded: {len(price_history)} stocks")
+            logger.info("Price history loaded: %d stocks", len(price_history))
         except:
             pass
     
@@ -860,8 +860,7 @@ def run_stage1(date_str=None, verbose=False):
             with open(regime_file, 'r', encoding='utf-8') as f:
                 regime_data = json.load(f)
                 regime = regime_data.get("regime", "unknown")
-            if verbose:
-                print(f"   📊 Market regime: {regime}")
+            logger.info("Market regime: %s", regime)
         except:
             pass
     
@@ -875,11 +874,9 @@ def run_stage1(date_str=None, verbose=False):
     watchlist = []
     rejected = []
     
-    if verbose:
-        print(f"🔍 Stage 1: Screening {len(daily_data)} stocks")
-        print(f"   Pass threshold: {thresholds['stage1']['pass_threshold']}")
-        print(f"   Watchlist threshold: {thresholds['stage1']['watchlist_threshold']}")
-        print()
+    logger.info("Stage 1: Screening %d stocks", len(daily_data))
+    logger.info("Pass threshold: %s", thresholds['stage1']['pass_threshold'])
+    logger.info("Watchlist threshold: %s", thresholds['stage1']['watchlist_threshold'])
     
     for stock in daily_data:
         # Daily data uses English keys
@@ -952,16 +949,14 @@ def run_stage1(date_str=None, verbose=False):
         }
     }
     
-    if verbose:
-        print(f"📊 Results:")
-        print(f"   Passed: {len(valid_candidates)}")
-        print(f"   Watchlist: {len(watchlist)}")
-        print(f"   Rejected: {len(rejected)}")
-        print()
-        if valid_candidates:
-            print(f"   Top 5 candidates:")
-            for c in valid_candidates[:5]:
-                print(f"      {c['code']} {c['name']}: {c['composite_score']}")
+    logger.info("Results:")
+    logger.info("Passed: %d", len(valid_candidates))
+    logger.info("Watchlist: %d", len(watchlist))
+    logger.info("Rejected: %d", len(rejected))
+    if valid_candidates:
+        logger.info("Top 5 candidates:")
+        for c in valid_candidates[:5]:
+            logger.info("  %s %s: %s", c['code'], c['name'], c['composite_score'])
     
     return output
 

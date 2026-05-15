@@ -9,8 +9,11 @@ import time
 import json
 import sys
 import warnings
+import logging
 from datetime import datetime, timedelta
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # Ensure parent dir is on path for intra-core imports (e.g., core.schemas)
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -32,19 +35,16 @@ def _validate_twse_response(data, endpoint_name, verbose=False):
     Warnings are logged for suspicious but not fatal issues.
     """
     if data is None:
-        if verbose:
-            print(f"    ⚠ {endpoint_name}: response is None")
+        logger.warning("%s: response is None", endpoint_name)
         return None
 
     # Reject HTML responses that slipped through content-type checks
     if isinstance(data, str):
         if "<!DOCTYPE" in data[:100] or "<html" in data[:100].lower():
-            if verbose:
-                print(f"    ⚠ {endpoint_name}: received HTML instead of JSON")
+            logger.warning("%s: received HTML instead of JSON", endpoint_name)
             return None
         # Some TWSE endpoints return error strings
-        if verbose:
-            print(f"    ⚠ {endpoint_name}: unexpected string response ({len(data)} chars)")
+        logger.warning("%s: unexpected string response (%d chars)", endpoint_name, len(data))
         return None
 
     # TWSE returns either a list of records or a dict with 'data' key
@@ -52,8 +52,7 @@ def _validate_twse_response(data, endpoint_name, verbose=False):
         # Check for known error structures
         if "error" in data or "Error" in data:
             err_msg = data.get("error", data.get("Error", "unknown"))
-            if verbose:
-                print(f"    ⚠ {endpoint_name}: API error — {err_msg}")
+            logger.warning("%s: API error — %s", endpoint_name, err_msg)
             return None
 
         # Some TWSE endpoints wrap results in {"data": [...]}
@@ -74,8 +73,7 @@ def _validate_twse_response(data, endpoint_name, verbose=False):
                 warnings.warn(f"TWSE {endpoint_name}: first record has unexpected field names: {list(first.keys())[:5]}")
         return data
 
-    if verbose:
-        print(f"    ⚠ {endpoint_name}: unexpected type {type(data).__name__}")
+    logger.warning("%s: unexpected type %s", endpoint_name, type(data).__name__)
     return None
 
 
@@ -119,8 +117,7 @@ def fetch_endpoint(name, path, params=None, verbose=False):
     
     for attempt in range(MAX_RETRIES):
         try:
-            if verbose:
-                print(f"  → {name} ({url})")
+            logger.debug("Fetching %s (%s)", name, url)
             
             r = requests.get(url, params=params, timeout=TIMEOUT)
             if r.status_code == 200:
@@ -132,44 +129,35 @@ def fetch_endpoint(name, path, params=None, verbose=False):
                         # Phase 20: Validate response structure at ingestion boundary
                         validated = _validate_twse_response(data, name, verbose=verbose)
                         if validated is None:
-                            if verbose:
-                                print(f"    ⚠ {name}: response validation failed")
+                            logger.warning("%s: response validation failed", name)
                             return []
-                        if verbose:
-                            count = len(validated) if isinstance(validated, list) else 'OK'
-                            print(f"    ✓ {name}: {count} records")
+                        count = len(validated) if isinstance(validated, list) else 'OK'
+                        logger.info("%s: %s records", name, count)
                         return validated
                     except json.JSONDecodeError:
-                        if verbose:
-                            print(f"    ⚠ {name}: JSON decode failed")
+                        logger.warning("%s: JSON decode failed", name)
                         return []
                 else:
                     # HTML response - likely auth issue or wrong params
-                    if verbose:
-                        print(f"    ⚠ {name}: Non-JSON response ({content_type})")
+                    logger.warning("%s: Non-JSON response (%s)", name, content_type)
                     return []
             else:
-                if verbose:
-                    print(f"    ⚠ {name}: HTTP {r.status_code}")
+                logger.warning("%s: HTTP %d", name, r.status_code)
                 return []
         except requests.exceptions.ConnectionResetError as e:
             wait = RETRY_BACKOFF ** (attempt + 1)
-            if verbose:
-                print(f"    ✗ {name}: Connection reset (attempt {attempt+1}/{MAX_RETRIES}), retrying in {wait}s...")
+            logger.error("%s: Connection reset (attempt %d/%d), retrying in %ds...", name, attempt+1, MAX_RETRIES, wait)
             time.sleep(wait)
         except requests.exceptions.Timeout as e:
             wait = RETRY_BACKOFF ** (attempt + 1)
-            if verbose:
-                print(f"    ✗ {name}: Timeout (attempt {attempt+1}/{MAX_RETRIES}), retrying in {wait}s...")
+            logger.error("%s: Timeout (attempt %d/%d), retrying in %ds...", name, attempt+1, MAX_RETRIES, wait)
             time.sleep(wait)
         except Exception as e:
             wait = RETRY_BACKOFF ** (attempt + 1)
-            if verbose:
-                print(f"    ✗ {name}: {e} (attempt {attempt+1}/{MAX_RETRIES}), retrying in {wait}s...")
+            logger.error("%s: %s (attempt %d/%d), retrying in %ds...", name, e, attempt+1, MAX_RETRIES, wait)
             time.sleep(wait)
     
-    if verbose:
-        print(f"    ✗ {name}: All {MAX_RETRIES} retries exhausted")
+    logger.error("%s: All %d retries exhausted", name, MAX_RETRIES)
     return []
 
 
@@ -185,10 +173,8 @@ def fetch_all(date_str=None, verbose=False):
     else:
         date_param = date_str.replace("-", "")
     
-    if verbose:
-        print(f"📡 Fetching TWSE data for {date_str}")
-        print(f"   Rate limit: {RATE_LIMIT_DELAY}s between requests, {BATCH_DELAY}s between batches")
-        print()
+    logger.info("Fetching TWSE data for %s", date_str)
+    logger.info("Rate limit: %ss between requests, %ss between batches", RATE_LIMIT_DELAY, BATCH_DELAY)
     
     # Fetch regular endpoints in batches with delays
     endpoint_list = list(ENDPOINTS.items())
@@ -218,10 +204,9 @@ def fetch_all(date_str=None, verbose=False):
     
     # Summary
     success_count = len(results) - len(failed)
-    if verbose:
-        print(f"\n✅ Fetched {success_count}/{len(ENDPOINTS)+1} endpoints")
-        if failed:
-            print(f"   ⚠ Critical failures: {', '.join(failed)}")
+    logger.info("Fetched %d/%d endpoints", success_count, len(ENDPOINTS)+1)
+    if failed:
+        logger.warning("Critical failures: %s", ', '.join(failed))
     
     return results
 
@@ -273,9 +258,8 @@ def validate_ingested_data(results, verbose=True):
             _safe_parse_float,
         )
     except ImportError as e:
-        if verbose:
-            print(f"⚠ Pydantic schemas unavailable: {e}")
-            return True  # Don't block pipeline
+        logger.warning("Pydantic schemas unavailable: %s", e)
+        return True  # Don't block pipeline
     
     all_ok = True
     total_validated = 0
@@ -295,13 +279,12 @@ def validate_ingested_data(results, verbose=True):
                 error_count += 1
         total_validated += len(daily_data)
         total_errors += error_count
-        if verbose:
-            pct_err = (error_count / len(daily_data) * 100) if daily_data else 0
-            print(f"\n📋 Validation: daily → {valid_count}/{len(daily_data)} valid ({pct_err:.1f}% errors)")
+        pct_err = (error_count / len(daily_data) * 100) if daily_data else 0
+        logger.info("Validation: daily → %d/%d valid (%.1f%% errors)", valid_count, len(daily_data), pct_err)
         # Hard gate for critical data
         if pct_err > 10:
             all_ok = False
-            print(f"❌ CRITICAL: Daily data has >10% validation failures! Pipeline should not proceed.")
+            logger.error("CRITICAL: Daily data has >10%% validation failures! Pipeline should not proceed.")
     
     # Validate PE ratio data
     pe_data = results.get("pe", [])
@@ -309,8 +292,8 @@ def validate_ingested_data(results, verbose=True):
         valid_list, err_count = batch_validate(pe_data, PERatioRecord, "PE ratios")
         total_validated += len(pe_data)
         total_errors += err_count
-        if verbose and err_count > 0:
-            print(f"📋 Validation: PE → {len(valid_list)}/{len(pe_data)} valid ({err_count} errors)")
+        if err_count > 0:
+            logger.info("Validation: PE → %d/%d valid (%d errors)", len(valid_list), len(pe_data), err_count)
     
     # Validate company info
     company_data = results.get("company", [])
@@ -318,8 +301,8 @@ def validate_ingested_data(results, verbose=True):
         valid_list, err_count = batch_validate(company_data, CompanyInfo, "Company info")
         total_validated += len(company_data)
         total_errors += err_count
-        if verbose and err_count > 0:
-            print(f"📋 Validation: company → {len(valid_list)}/{len(company_data)} valid ({err_count} errors)")
+        if err_count > 0:
+            logger.info("Validation: company → %d/%d valid (%d errors)", len(valid_list), len(company_data), err_count)
     
     # Validate revenue data
     revenue_data = results.get("revenue", [])
@@ -327,8 +310,8 @@ def validate_ingested_data(results, verbose=True):
         valid_list, err_count = batch_validate(revenue_data, RevenueRecord, "Revenue")
         total_validated += len(revenue_data)
         total_errors += err_count
-        if verbose and err_count > 0:
-            print(f"📋 Validation: revenue → {len(valid_list)}/{len(revenue_data)} valid ({err_count} errors)")
+        if err_count > 0:
+            logger.info("Validation: revenue → %d/%d valid (%d errors)", len(valid_list), len(revenue_data), err_count)
     
     # Validate holidays data
     holiday_data = results.get("holidays", [])
@@ -336,16 +319,15 @@ def validate_ingested_data(results, verbose=True):
         valid_list, err_count = batch_validate(holiday_data, HolidayEntry, "Holidays")
         total_validated += len(holiday_data)
         total_errors += err_count
-        if verbose and err_count > 0:
-            print(f"📋 Validation: holidays → {len(valid_list)}/{len(holiday_data)} valid ({err_count} errors)")
+        if err_count > 0:
+            logger.info("Validation: holidays → %d/%d valid (%d errors)", len(valid_list), len(holiday_data), err_count)
     
     # Summary
-    if verbose:
-        if total_validated > 0:
-            overall_pct = (total_errors / total_validated * 100) if total_validated else 0
-            print(f"\n✅ Total validated: {total_validated} records, {total_errors} errors ({overall_pct:.1f}%)")
-        else:
-            print("⚠ No data to validate")
+    if total_validated > 0:
+        overall_pct = (total_errors / total_validated * 100) if total_validated else 0
+        logger.info("Total validated: %d records, %d errors (%.1f%%)", total_validated, total_errors, overall_pct)
+    else:
+        logger.warning("No data to validate")
     
     return all_ok
 
@@ -366,15 +348,13 @@ def validate_data(results, verbose=False):
             issues.append(f"{name}: expected >={minimum}, got {len(data) if isinstance(data, list) else 0}")
     
     if issues:
-        if verbose:
-            print(f"\n❌ Data validation FAILED:")
-            for issue in issues:
-                print(f"   - {issue}")
-            print(f"   → Pipeline should NOT proceed with insufficient data")
+        logger.error("Data validation FAILED:")
+        for issue in issues:
+            logger.error("  - %s", issue)
+        logger.error("Pipeline should NOT proceed with insufficient data")
         return False, issues
     
-    if verbose:
-        print(f"\n✅ Data validation PASSED — all critical endpoints have sufficient data")
+    logger.info("Data validation PASSED — all critical endpoints have sufficient data")
     return True, []
 
 
@@ -388,30 +368,29 @@ def _run_ex_date_validation(data_dir: Path, verbose: bool = False):
         from corporate_actions import CorporateActionHandler
         handler = CorporateActionHandler(str(data_dir))
         issues = handler.validate_ex_dates()
-        if issues and verbose:
+        if issues:
             errors = [i for i in issues if i.get("type") == "error"]
             warnings = [i for i in issues if i.get("type") == "warning"]
-            print(f"\n📅 Ex-date validation: {len(errors)} error(s), {len(warnings)} warning(s)")
+            logger.info("Ex-date validation: %d error(s), %d warning(s)", len(errors), len(warnings))
             for issue in errors[:5]:  # Show up to 5 errors
                 code = issue.get("stock_code", "?")
                 date = issue.get("date", "?")
                 msg = issue.get("message", "")
-                print(f"   ❌ [{code}] {date}: {msg}")
+                logger.error("[%s] %s: %s", code, date, msg)
             if len(errors) > 5:
-                print(f"   ... and {len(errors) - 5} more errors")
+                logger.error("... and %d more errors", len(errors) - 5)
             for issue in warnings[:3]:  # Show up to 3 warnings
                 msg = issue.get("message", "")
                 code = issue.get("stock_code", "")
                 date = issue.get("date", "")
                 if code:
-                    print(f"   ⚠️ [{code}] {date}: {msg}")
+                    logger.warning("[%s] %s: %s", code, date, msg)
                 else:
-                    print(f"   ⚠️ {msg}")
+                    logger.warning("%s", msg)
     except ImportError:
         pass  # corporate_actions not available
     except Exception as e:
-        if verbose:
-            print(f"\n⚠ Ex-date validation failed: {e}")
+        logger.warning("Ex-date validation failed: %s", e)
 
 
 def main():

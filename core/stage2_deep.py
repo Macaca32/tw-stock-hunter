@@ -302,8 +302,7 @@ def validate_stage1_candidates(candidates, verbose=False):
     try:
         from schemas import Stage1Candidate, ScoreBreakdown
     except ImportError as e:
-        if verbose:
-            print(f"⚠ Pydantic schemas unavailable for inter-stage validation: {e}")
+        logger.warning("Pydantic schemas unavailable for inter-stage validation: %s", e)
         return candidates  # Return raw data without validation
 
     valid = []
@@ -339,12 +338,11 @@ def validate_stage1_candidates(candidates, verbose=False):
             valid.append(validated.model_dump())
         except Exception as e:
             invalid_count += 1
-            if verbose and invalid_count <= 3:
+            if invalid_count <= 3:
                 code = str(c.get("code", f"#{i}"))
-                print(f"   ⚠ Stage→Stage2 validation failed for {code}: {e}")
+                logger.warning("Stage→Stage2 validation failed for %s: %s", code, e)
 
-    if verbose:
-        print(f"📋 Inter-stage validation: {len(valid)}/{len(candidates)} valid ({invalid_count} excluded)")
+    logger.info("Inter-stage validation: %d/%d valid (%d excluded)", len(valid), len(candidates), invalid_count)
 
     return valid
 
@@ -379,14 +377,12 @@ def run_stage2(date_str=None, verbose=False):
     # Phase 11: Inter-stage validation — catch field mismatches early
     raw_candidates = list(candidates)
     candidates = validate_stage1_candidates(candidates, verbose=verbose)
-    if verbose and len(candidates) != len(raw_candidates):
-        print(f"   Filtered {len(raw_candidates)} Stage 1 candidates → {len(candidates)} valid")
+    if len(candidates) != len(raw_candidates):
+        logger.info("Filtered %d Stage 1 candidates → %d valid", len(raw_candidates), len(candidates))
     
-    if verbose:
-        print(f"🔬 Stage 2: Deep-diving {len(candidates)} candidates")
-        print(f"   Stage 2 min score: {thresholds['stage2']['fundamental_score_min']}")
-        print(f"   Red flag disqualification: {thresholds['stage2'].get('red_flag_disqualify', True)}")
-        print()
+    logger.info("Stage 2: Deep-diving %d candidates", len(candidates))
+    logger.info("Stage 2 min score: %s", thresholds['stage2']['fundamental_score_min'])
+    logger.info("Red flag disqualification: %s", thresholds['stage2'].get('red_flag_disqualify', True))
     
     deep_results = []
     disqualified = []
@@ -480,8 +476,7 @@ def run_stage2(date_str=None, verbose=False):
                 "combined_score": 0
             }
             disqualified.append(result)
-            if verbose:
-                print(f"   ❌ DISQUALIFIED {code} {name}: {'; '.join(red_flags)}")
+            logger.error("DISQUALIFIED %s %s: %s", code, name, '; '.join(red_flags))
             continue
         
         # Weighted Stage 2 score — load from config, fall back to hardcoded defaults
@@ -547,29 +542,27 @@ def run_stage2(date_str=None, verbose=False):
         "diagnostics": diagnostics  # Phase 12
     }
     
-    if verbose:
-        print(f"📊 Stage 2 Results:")
-        print(f"   Passed: {len(deep_results)}")
-        print(f"   Disqualified: {len(disqualified)}")
-        
-        # Phase 12: Print error summary
-        total_errors = sum(diagnostics["check_errors"].values())
-        if total_errors > 0:
-            print(f"   ⚠ Check errors: {total_errors}/{diagnostics['total_candidates']} candidates")
-            for check, count in diagnostics["check_errors"].items():
-                if count > 0:
-                    print(f"      - {check}: {count} errors")
-        
-        # Phase 12: Print score stats
-        print(f"   Score ranges (passed candidates):")
-        for check, stats in diagnostics.get("score_stats", {}).items():
-            if stats["count"] > 0:
-                print(f"      {check}: {stats['min']}-{stats['max']} (mean={stats['mean']})")
-        print()
-        if deep_results:
-            print(f"   Top 5 after deep-dive:")
-            for c in deep_results[:5]:
-                print(f"      {c['code']} {c['name']}: combined={c['combined_score']} (S1={c['stage1_score']}, S2={c['stage2_score']})")
+    logger.info("Stage 2 Results:")
+    logger.info("Passed: %d", len(deep_results))
+    logger.info("Disqualified: %d", len(disqualified))
+    
+    # Phase 12: Print error summary
+    total_errors = sum(diagnostics["check_errors"].values())
+    if total_errors > 0:
+        logger.warning("Check errors: %d/%d candidates", total_errors, diagnostics['total_candidates'])
+        for check, count in diagnostics["check_errors"].items():
+            if count > 0:
+                logger.warning("  - %s: %d errors", check, count)
+    
+    # Phase 12: Print score stats
+    logger.info("Score ranges (passed candidates):")
+    for check, stats in diagnostics.get("score_stats", {}).items():
+        if stats["count"] > 0:
+            logger.info("  %s: %s-%s (mean=%s)", check, stats['min'], stats['max'], stats['mean'])
+    if deep_results:
+        logger.info("Top 5 after deep-dive:")
+        for c in deep_results[:5]:
+            logger.info("  %s %s: combined=%s (S1=%s, S2=%s)", c['code'], c['name'], c['combined_score'], c['stage1_score'], c['stage2_score'])
     
     return output
 
