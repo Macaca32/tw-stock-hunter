@@ -54,17 +54,34 @@ def normalize_stock_id(sid):
         return sid.lstrip("0").ljust(4) if sid.startswith("0") else sid
 
 
-def check_dividend_history(stock_code, dividends_data):
+def _index_by_stock_code(data_list):
+    """Build a dict mapping stock_code -> list of matching records.
+
+    Eliminates O(n) linear scans per stock in every check function.
+    Called once per dataset; replaces the repeated loop-and-filter pattern.
+    """
+    index = {}
+    for record in data_list:
+        code = get_field(record, "公司代號", "Code", "")
+        if code:
+            index.setdefault(code, []).append(record)
+    return index
+
+
+def check_dividend_history(stock_code, dividends_data, dividends_index=None):
     """Check dividend consistency and yield (0-100)
     
     FIX: Continuous scoring instead of discrete buckets.
     Previously only produced 2 unique values across 75 stocks due to
     coarse ±10/±20 adjustments from a base of 50.
     """
-    stock_divs = []
-    for d in dividends_data:
-        if get_field(d, "公司代號", "Code", "") == stock_code:
-            stock_divs.append(d)
+    if dividends_index is not None:
+        stock_divs = dividends_index.get(stock_code, [])
+    else:
+        stock_divs = []
+        for d in dividends_data:
+            if get_field(d, "公司代號", "Code", "") == stock_code:
+                stock_divs.append(d)
     
     if not stock_divs:
         return 25.0, "no_data"
@@ -107,12 +124,15 @@ def check_dividend_history(stock_code, dividends_data):
         return None
 
 
-def check_announcements(stock_code, announce_data, days_back=30):
+def check_announcements(stock_code, announce_data, days_back=30, announce_index=None):
     """Check for negative corporate announcements (0-100)"""
-    stock_anns = []
-    for a in announce_data:
-        if get_field(a, "公司代號", "Code", "") == stock_code:
-            stock_anns.append(a)
+    if announce_index is not None:
+        stock_anns = announce_index.get(stock_code, [])
+    else:
+        stock_anns = []
+        for a in announce_data:
+            if get_field(a, "公司代號", "Code", "") == stock_code:
+                stock_anns.append(a)
     
     if not stock_anns:
         return 50, "neutral"  # No news is OK
@@ -149,12 +169,15 @@ def check_announcements(stock_code, announce_data, days_back=30):
         return None
 
 
-def check_major_shareholders(stock_code, major_sh_data):
+def check_major_shareholders(stock_code, major_sh_data, shareholders_index=None):
     """Check institutional ownership quality (0-100)"""
-    stock_sh = []
-    for s in major_sh_data:
-        if get_field(s, "公司代號", "Code", "") == stock_code:
-            stock_sh.append(s)
+    if shareholders_index is not None:
+        stock_sh = shareholders_index.get(stock_code, [])
+    else:
+        stock_sh = []
+        for s in major_sh_data:
+            if get_field(s, "公司代號", "Code", "") == stock_code:
+                stock_sh.append(s)
     
     if not stock_sh:
         return 25, "no_data"
@@ -181,12 +204,15 @@ def check_major_shareholders(stock_code, major_sh_data):
         return None
 
 
-def check_pledge_risk(stock_code, pledge_data):
+def check_pledge_risk(stock_code, pledge_data, pledge_index=None):
     """Check if major shareholders pledged shares (lower = better)"""
-    stock_pledge = []
-    for p in pledge_data:
-        if get_field(p, "公司代號", "Code", "") == stock_code:
-            stock_pledge.append(p)
+    if pledge_index is not None:
+        stock_pledge = pledge_index.get(stock_code, [])
+    else:
+        stock_pledge = []
+        for p in pledge_data:
+            if get_field(p, "公司代號", "Code", "") == stock_code:
+                stock_pledge.append(p)
     
     if not stock_pledge:
         return 100, "no_pledge"  # No pledge = good
@@ -219,12 +245,15 @@ def check_pledge_risk(stock_code, pledge_data):
         return None
 
 
-def check_penalty_risk(stock_code, penalty_data):
+def check_penalty_risk(stock_code, penalty_data, penalty_index=None):
     """Check for regulatory penalties (lower = worse)"""
-    stock_penalties = []
-    for p in penalty_data:
-        if get_field(p, "公司代號", "Code", "") == stock_code:
-            stock_penalties.append(p)
+    if penalty_index is not None:
+        stock_penalties = penalty_index.get(stock_code, [])
+    else:
+        stock_penalties = []
+        for p in penalty_data:
+            if get_field(p, "公司代號", "Code", "") == stock_code:
+                stock_penalties.append(p)
     
     if not stock_penalties:
         return 100, "clean"
@@ -339,6 +368,13 @@ def run_stage2(date_str=None, verbose=False):
     pledge_data = datasets.get("pledge", [])
     penalty_data = datasets.get("penalties", [])
     
+    # Phase 19: Pre-build index dicts for O(1) lookups instead of O(n) scans
+    dividends_index = _index_by_stock_code(dividends_data)
+    announce_index = _index_by_stock_code(announce_data)
+    shareholders_index = _index_by_stock_code(major_sh_data)
+    pledge_index = _index_by_stock_code(pledge_data)
+    penalty_index = _index_by_stock_code(penalty_data)
+    
     candidates = stage1_results.get("candidates", [])
     # Phase 11: Inter-stage validation — catch field mismatches early
     raw_candidates = list(candidates)
@@ -374,12 +410,12 @@ def run_stage2(date_str=None, verbose=False):
             continue
         stage1_score = float(cs_raw)
         
-        # Run deep checks
-        div_result = check_dividend_history(code, dividends_data)
-        ann_result = check_announcements(code, announce_data)
-        sh_result = check_major_shareholders(code, major_sh_data)
-        pledge_result = check_pledge_risk(code, pledge_data)
-        penalty_result = check_penalty_risk(code, penalty_data)
+        # Run deep checks (with O(1) index lookups)
+        div_result = check_dividend_history(code, dividends_data, dividends_index)
+        ann_result = check_announcements(code, announce_data, 30, announce_index)
+        sh_result = check_major_shareholders(code, major_sh_data, shareholders_index)
+        pledge_result = check_pledge_risk(code, pledge_data, pledge_index)
+        penalty_result = check_penalty_risk(code, penalty_data, penalty_index)
         
         # Phase 12 R2: Handle None returns from checks (missing data → skip gracefully)
         div_score, div_status = (div_result if div_result is not None else (None, "error"))
