@@ -1,7 +1,7 @@
 {
-  "current_phase": 21,
-  "phase_name": "Remaining Z.ai findings — SQLite migration (#21), unit tests (#22), logging (#23)",
-  "started_at": "2026-05-15T17:00:00+08:00",
+  "current_phase": 22,
+  "phase_name": "TBD — awaiting Jerry's direction on next priority",
+  "started_at": "2026-05-15T21:30:00+08:00",
   "completed_phases": [
     {
       "phase": 0,
@@ -161,10 +161,18 @@
       "completed_at": "2026-05-15T17:00:00+08:00",
       "summary": "Z.ai agent mode completed all 3 fixes. #13 weight smoothing: normalize first, then clamp with redistribution among unconstrained weights (old approach clamped then normalized, breaking intent). #15 Telegram alerts: added send_message() via Bot API with env var credentials (TELEGRAM_BOT_TOKEN/CHAT_ID), graceful degradation if unconfigured, dry-run CLI support. #18 input validation: _validate_twse_response() catches HTML/string/dict/list cases at ingestion boundary in fetch_data.py.",
       "commit": "3a689de..45e707e (3 commits)"
+    },
+    {
+      "phase": 21,
+      "name": "Polish — unit tests (#22), structured logging (#23)",
+      "started_at": "2026-05-15T17:00:00+08:00",
+      "completed_at": "2026-05-15T21:30:00+08:00",
+      "summary": "Z.ai agent mode completed both fixes. #22 unit tests: 475-line test_core.py with pytest covering RSI Wilder smoothing, backward price adjustment, weight smoothing boundary conditions, holiday calendar trading-day counting, and paper trader holding-days calculation. All inline data, no API calls. conftest.py provides shared fixtures. #23 structured logging: new core/logging_config.py with setup_logging(verbose=False, log_file=None, quiet=False), suppresses noisy third-party loggers (urllib3, requests, yfinance). Replaced print() statements in fetch_data, fetch_history, stage1_screen, stage2_deep.",
+      "commit": "9b500ee..f6cc392 (2 commits)"
     }
   ],
   "notes": "Phase 20 done. Phase 21 pending: SQLite migration (#21), unit tests (#22), logging instead of print (#23).",
-  "rounds_completed": 12,
+  "rounds_completed": 13,
   "last_zai_round": {
     "round": 6,
     "date": "2026-05-11",
