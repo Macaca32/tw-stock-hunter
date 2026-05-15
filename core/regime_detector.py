@@ -240,7 +240,7 @@ def detect_regime_raw(prices, config, corp_handler=None):
     ratio_150 = above_150 / total if total > 0 else 0.5
     ratio_300 = above_300 / total if total > 0 else 0.5
     
-    vol = calc_volatility(prices)
+    vol = calc_volatility(prices, corp_handler=corp_handler)
     global_risk = assess_global_risk(prices, corp_handler=corp_handler)
     breadth = calc_market_breadth(prices, lookback=20)
     
