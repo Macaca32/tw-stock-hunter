@@ -14,11 +14,14 @@ Key issues this prevents:
 
 from typing import Optional, Dict, List, Any
 from datetime import datetime
+import logging
+
+logger = logging.getLogger(__name__)
 
 try:
     from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 except ImportError:
-    print("⚠ Pydantic not available - install with: pip install pydantic")
+    logger.warning("Pydantic not available - install with: pip install pydantic")
     raise
 
 
@@ -388,14 +391,14 @@ def batch_validate(records: list, schema_cls, name: str) -> tuple:
             # Log first few errors for debugging
             if errors <= 3 and i < 50:
                 code_val = raw.get("公司代號", raw.get("Code", raw.get("code", f"#{i}")))
-                print(f"   ⚠ {name} record {code_val}: {type(e).__name__}")
+                logger.warning("%s record %s: %s", name, code_val, type(e).__name__)
 
     if errors > 0:
         pct_err = (errors / len(records) * 100)
         if pct_err > 5:
-            print(f"❌ {name}: {errors}/{len(records)} records failed validation ({pct_err:.1f}% — HIGH)")
+            logger.error("%s: %d/%d records failed validation (%.1f%% — HIGH)", name, errors, len(records), pct_err)
         else:
-            print(f"⚠ {name}: {errors}/{len(records)} records failed validation")
+            logger.warning("%s: %d/%d records failed validation", name, errors, len(records))
 
     return valid, errors
 
@@ -459,9 +462,9 @@ if __name__ == "__main__":
 
     record = validate_daily_stock(sample_daily)
     if record:
-        print(f"✓ Validated daily stock: {record.code} {record.name} @ {record.closing_price}")
+        logger.info("Validated daily stock: %s %s @ %s", record.code, record.name, record.closing_price)
     else:
-        print("✗ Validation failed")
+        logger.warning("Validation failed")
 
     # Test price point
     sample_price = {
@@ -476,4 +479,4 @@ if __name__ == "__main__":
 
     pp = validate_price_point(sample_price)
     if pp:
-        print(f"✓ Validated price point: {pp.date} close={pp.close} adj_close={pp.adj_close}")
+        logger.info("Validated price point: %s close=%s adj_close=%s", pp.date, pp.close, pp.adj_close)

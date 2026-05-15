@@ -24,7 +24,10 @@ TWSE 產業別 codes map to:
 """
 
 import json
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # TWSE industry code to sector mapping
 # Phase 5: Refined 12-15 sub-sectors for better diversification tracking.
@@ -254,18 +257,18 @@ def main():
     """Test sector mapping."""
     sector_map = load_sector_mapping()
     
-    print(f"Loaded sector mapping for {len(sector_map)} stocks")
-    print("\nSector distribution:")
+    logger.info("Loaded sector mapping for %d stocks", len(sector_map))
+    logger.info("Sector distribution:")
     summary = get_sector_summary(sector_map)
     for sector, count in summary.items():
-        print(f"  {sector}: {count}")
+        logger.info("  %s: %d", sector, count)
     
     # Test specific stocks
     test_stocks = ["2330", "2317", "2881", "2882", "2301", "2454"]
-    print("\nTest stocks:")
+    logger.info("Test stocks:")
     for code in test_stocks:
         sector = get_sector(code, sector_map)
-        print(f"  {code}: {sector}")
+        logger.info("  %s: %s", code, sector)
     
     return sector_map
 

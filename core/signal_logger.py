@@ -4,8 +4,11 @@ Signal Logger - Track all signals for self-improvement loop
 """
 
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 class SignalLogger:
@@ -137,11 +140,10 @@ def generate_report(date_str=None, verbose=False):
         json.dump(report, f, ensure_ascii=False, indent=2)
     
     if verbose:
-        print(f"\n📋 Daily Report for {date}")
-        print(f"   Stage 1: {stage1_results['summary']['passed']} passed / {stage1_results['summary']['total_screened']} screened")
-        print(f"   Stage 2: {stage2_results['summary']['passed_stage2']} passed / {stage2_results['summary']['disqualified']} disqualified")
-        print(f"   Trading Stats: {stats}")
-        print(f"\n💾 Saved to reports/report_{date}.json")
+        logger.info("Daily Report for %s", date)
+        logger.info("Stage 1: %d passed / %d screened", stage1_results['summary']['passed'], stage1_results['summary']['total_screened'])
+        logger.info("Stage 2: %d passed / %d disqualified", stage2_results['summary']['passed_stage2'], stage2_results['summary']['disqualified'])
+        logger.info("Trading Stats: %s", stats)
     
     return report
 

@@ -12,9 +12,12 @@ Features:
 """
 
 import json
+import logging
 import os
 from datetime import date, datetime
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 class TelegramAlerts:
@@ -45,7 +48,7 @@ class TelegramAlerts:
         are not configured — prints a warning but does not raise.
         """
         if not self.bot_token or not self.chat_id:
-            print("⚠ Telegram credentials not configured (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID)")
+            logger.warning("Telegram credentials not configured (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID)")
             return False
 
         import requests
@@ -62,13 +65,13 @@ class TelegramAlerts:
             if response.status_code == 200:
                 return True
             else:
-                print(f"⚠ Telegram API error: HTTP {response.status_code} — {response.text[:200]}")
+                logger.warning("Telegram API error: HTTP %d — %s", response.status_code, response.text[:200])
                 return False
         except requests.exceptions.Timeout:
-            print("⚠ Telegram API: request timed out")
+            logger.warning("Telegram API: request timed out")
             return False
         except Exception as e:
-            print(f"⚠ Failed to send Telegram message: {e}")
+            logger.warning("Failed to send Telegram message: %s", e)
             return False
 
     def deliver_alert(self, date_str=None, alert_type="daily") -> bool:

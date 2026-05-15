@@ -15,19 +15,23 @@ import time
 import warnings
 from pathlib import Path
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 try:
     import yfinance as yf
     YF_AVAILABLE = True
 except ImportError:
     YF_AVAILABLE = False
-    print("⚠️  yfinance not available")
+    logger.warning("yfinance not available")
 
 try:
     import pandas as pd
     PD_AVAILABLE = True
 except ImportError:
     PD_AVAILABLE = False
-    print("⚠️  pandas not available")
+    logger.warning("pandas not available")
 
 # Timeout per yfinance request (seconds)
 YF_REQUEST_TIMEOUT = 5
@@ -53,7 +57,7 @@ def _validate_yf_dataframe(df, expected_columns, context="", verbose=False):
     non_null_cols = [c for c in df.columns if df[c].notna().any()]
     if not non_null_cols:
         if verbose:
-            print(f"    ⚠ yfinance {context}: all columns are null")
+            logger.debug("yfinance %s: all columns are null", context)
         return None
 
     return df
@@ -128,7 +132,7 @@ def _try_fetch_yf_institutional(code: str, verbose: bool = False) -> dict | None
         return result
     except (YfTimeout, Exception) as e:
         if verbose:
-            print(f"    ✗ {code}: {type(e).__name__}")
+            logger.debug("%s: %s", code, type(e).__name__)
         return None
     finally:
         signal.alarm(0)
@@ -161,7 +165,7 @@ def fetch_institutional_data(stock_codes, output_dir=None, verbose=False):
             with open(cache_file, "r", encoding="utf-8") as f:
                 cached = json.load(f)
             if cached and verbose:
-                print(f"  → Using cached institutional data ({len(cached)} stocks, {cache_age_hours:.1f}h old)")
+                logger.info("Using cached institutional data (%d stocks, %.1fh old)", len(cached), cache_age_hours)
             # Return cache if less than 24h old
             if cache_age_hours < 24:
                 return cached
@@ -172,8 +176,8 @@ def fetch_institutional_data(stock_codes, output_dir=None, verbose=False):
     consecutive_failures = 0
 
     if verbose:
-        print(f"  → Fetching institutional data for {len(stock_codes)} stocks...")
-        print(f"     ⚠ yfinance .TW support is unreliable — early exit on failures")
+        logger.info("Fetching institutional data for %d stocks...", len(stock_codes))
+        logger.info("yfinance .TW support is unreliable — early exit on failures")
 
     # Only attempt first N stocks (top candidates get priority)
     max_attempts = min(len(stock_codes), 200)
@@ -187,7 +191,7 @@ def fetch_institutional_data(stock_codes, output_dir=None, verbose=False):
             consecutive_failures += 1
             if consecutive_failures >= YF_MAX_CONSECUTIVE_FAILURES:
                 if verbose:
-                    print(f"     ⚠ yfinance returning {consecutive_failures} consecutive failures — skipping remaining stocks")
+                    logger.warning("yfinance returning %d consecutive failures — skipping remaining stocks", consecutive_failures)
                 break
 
     # Save to file (even if empty, so we know we tried)
@@ -195,7 +199,7 @@ def fetch_institutional_data(stock_codes, output_dir=None, verbose=False):
         json.dump(inst_data, f, ensure_ascii=False, indent=2)
 
     if verbose:
-        print(f"  ✓ Institutional data: {len(inst_data)}/{len(stock_codes)} stocks via yfinance")
+        logger.info("Institutional data: %d/%d stocks via yfinance", len(inst_data), len(stock_codes))
 
     return inst_data
 
@@ -279,7 +283,7 @@ def main():
         
         fetch_institutional_data(stock_codes, output_dir=data_dir, verbose=args.verbose)
     else:
-        print("❌ No daily data found")
+        logger.error("No daily data found")
 
 
 if __name__ == "__main__":

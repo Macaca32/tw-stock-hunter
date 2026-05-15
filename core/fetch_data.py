@@ -426,7 +426,7 @@ def main():
     # Phase 9: Pydantic validation at ingestion boundary
     validate_ingested_ok = validate_ingested_data(results, verbose=verbose)
     if not validate_ingested_ok:
-        print(f"\n❌ Aborting save — data quality too low (>10% validation failures)")
+        logger.error("Aborting save — data quality too low (>10%% validation failures)")
         sys.exit(1)
 
     # Phase 15: Ex-date validation against holiday calendar
@@ -435,14 +435,14 @@ def main():
     # Validate before saving (record count check)
     ok, issues = validate_data(results, verbose=verbose)
     if not ok:
-        print(f"\n❌ Aborting save — data validation failed")
+        logger.error("Aborting save — data validation failed")
         sys.exit(1)
     
     if not args.dry_run:
         meta = save_results(results, date_str=args.date)
         if verbose:
-            print(f"\n💾 Saved to data/ directory")
-            print(f"   Records: {meta['record_counts']}")
+            logger.info("Saved to data/ directory")
+            logger.info("Records: %s", meta['record_counts'])
     
     return results
 

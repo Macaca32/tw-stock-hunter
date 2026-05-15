@@ -25,11 +25,15 @@ Usage:
 """
 
 import json
+import logging
 import time
 import requests
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Any
+
+
+logger = logging.getLogger(__name__)
 
 
 # TWSE Open API base
@@ -731,22 +735,22 @@ def main():
     handler = CorporateActionHandler()
 
     summary = handler.summary()
-    print(f"Corporate Action Handler Summary:")
-    print(f"  TWT49U stocks: {summary['twt49u_stocks']}")
-    print(f"  TWT49U actions: {summary['twt49u_actions']}")
-    print(f"  Declaration stocks: {summary['declaration_stocks']}")
-    print(f"  Declaration actions: {summary['declaration_actions']}")
+    logger.info("Corporate Action Handler Summary:")
+    logger.info("  TWT49U stocks: %d", summary['twt49u_stocks'])
+    logger.info("  TWT49U actions: %d", summary['twt49u_actions'])
+    logger.info("  Declaration stocks: %d", summary['declaration_stocks'])
+    logger.info("  Declaration actions: %d", summary['declaration_actions'])
 
     # Test with a known stock
     test_code = "2330"
     actions = handler.get_actions_for_stock(test_code)
     if actions:
-        print(f"\n{test_code} corporate actions:")
+        logger.info("%s corporate actions:", test_code)
         for a in actions[:5]:
-            print(f"  {a['date']}: cash={a.get('cash_div', 0)}, stock={a.get('stock_div', 0)}, source={a.get('source', '?')}")
+            logger.info("  %s: cash=%s, stock=%s, source=%s", a['date'], a.get('cash_div', 0), a.get('stock_div', 0), a.get('source', '?'))
 
     # Test backward adjustment with sample data
-    print(f"\nBackward adjustment test:")
+    logger.info("Backward adjustment test:")
     sample_prices = [
         {"date": "2026-06-01", "close": 280.0},
         {"date": "2026-06-02", "close": 282.0},
@@ -756,7 +760,7 @@ def main():
     ]
     adjusted = handler.backward_adjust_prices(sample_prices, test_code)
     for p in adjusted:
-        print(f"  {p['date']}: close={p['close']}, adj_close={p['adj_close']}, factor={p.get('cumulative_factor', 1.0)}")
+        logger.info("  %s: close=%s, adj_close=%s, factor=%s", p['date'], p['close'], p['adj_close'], p.get('cumulative_factor', 1.0))
 
     return handler
 
