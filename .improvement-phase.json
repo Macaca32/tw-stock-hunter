@@ -1,7 +1,8 @@
 {
   "current_phase": 23,
-  "phase_name": "TBD — awaiting Jerry's direction on next priority",
+  "phase_name": "SQLite data layer — read-only view on top of existing JSON data files",
   "started_at": "2026-05-15T22:30:00+08:00",
+  "completed_at": "2026-05-16T12:00:00+08:00",
   "completed_phases": [
     {
       "phase": 0,
@@ -177,9 +178,17 @@
       "completed_at": "2026-05-15T22:30:00+08:00",
       "summary": "Fresh full review by Z.ai found and fixed 12 issues: stage2 None guards, half-day sessions, corp_handler in volatility calc, adj_close/adj_volume in momentum scoring, TPEx range alignment, stock dividend adjustment, structured logging completion, ROC date deduplication, O(1) index lookups (~6500+ linear scans eliminated), unknown regime safety default (0.0), data validation gates in pipeline orchestrator.",
       "commit": "56475c9..8fd5188 (12 commits total, both Z.ai sessions)"
+    },
+    {
+      "phase": 23,
+      "name": "SQLite data layer — read-only view on top of existing JSON data files",
+      "started_at": "2026-05-15T22:30:00+08:00",
+      "completed_at": "2026-05-16T12:00:00+08:00",
+      "summary": "New core/datastore.py provides SQLite database at data/hunter.db with 4 tables: stocks_daily (OHLCV + adj_close/adj_volume per stock-date), corporate_actions (ex-dividend dates with cash/stock dividends), regime_snapshots (daily regime + TAIEX proxy), portfolio_history (paper trade entries/exits with P&L). Idempotent migrate_json_to_sqlite() reads price_history.json, twt49u_ex_dividend.json, dividends_*.json, regime.json, paper_trades.json and populates DB using INSERT OR IGNORE. Query helpers: get_daily_history(), get_regime_history(), get_portfolio_pnl(), get_corporate_actions(), get_stocks_on_date(), get_available_dates(), get_stock_date_range(), get_daily_history_batch(). JSON files remain write target for backward compat. 44 unit tests covering schema init, migration idempotency, all query helpers, and edge cases (malformed JSON, empty data dir, readonly enforcement). All 80 tests pass (36 existing + 44 new).",
+      "commit": "9adc6c3"
     }
   ],
-  "notes": "Phase 20 done. Phase 21 pending: SQLite migration (#21), unit tests (#22), logging instead of print (#23).",
+  "notes": "Phase 23 done. SQLite data layer provides efficient historical queries and cumulative tracking on top of existing JSON data files.",
   "rounds_completed": 13,
   "last_zai_round": {
     "round": 6,
