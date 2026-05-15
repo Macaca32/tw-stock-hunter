@@ -1,7 +1,7 @@
 {
-  "current_phase": 20,
-  "phase_name": "Remaining Z.ai findings — weight smoothing (#13), Telegram alerts fix (#15), input validation (#18)",
-  "started_at": "2026-05-15T14:30:00+08:00",
+  "current_phase": 21,
+  "phase_name": "Remaining Z.ai findings — SQLite migration (#21), unit tests (#22), logging (#23)",
+  "started_at": "2026-05-15T17:00:00+08:00",
   "completed_phases": [
     {
       "phase": 0,
@@ -153,10 +153,18 @@
       "completed_at": "2026-05-15T14:30:00+08:00",
       "summary": "Z.ai agent mode completed both fixes. #10 O(n²) scan fix: built index dicts once in stage2_deep.py, all 5 check functions use O(1) lookups instead of linear scans (~30,000 iterations saved per run). Backward compatible with optional index params. #11 Pipeline runner: new run_pipeline.py orchestrates full pipeline (fetch→history→regime→stage1→stage2→paper_trader→telegram_alerts) with timing, error handling, state.json updates.",
       "commit": "d72e6c1..15a3367 (2 commits)"
+    },
+    {
+      "phase": 20,
+      "name": "Remaining Z.ai findings — weight smoothing (#13), Telegram alerts fix (#15), input validation (#18)",
+      "started_at": "2026-05-15T14:30:00+08:00",
+      "completed_at": "2026-05-15T17:00:00+08:00",
+      "summary": "Z.ai agent mode completed all 3 fixes. #13 weight smoothing: normalize first, then clamp with redistribution among unconstrained weights (old approach clamped then normalized, breaking intent). #15 Telegram alerts: added send_message() via Bot API with env var credentials (TELEGRAM_BOT_TOKEN/CHAT_ID), graceful degradation if unconfigured, dry-run CLI support. #18 input validation: _validate_twse_response() catches HTML/string/dict/list cases at ingestion boundary in fetch_data.py.",
+      "commit": "3a689de..45e707e (3 commits)"
     }
   ],
-  "notes": "Phase 19 done. Phase 20 pending: weight smoothing normalization (#13), Telegram alerts never sends (#15), TWSE input validation (#18).",
-  "rounds_completed": 11,
+  "notes": "Phase 20 done. Phase 21 pending: SQLite migration (#21), unit tests (#22), logging instead of print (#23).",
+  "rounds_completed": 12,
   "last_zai_round": {
     "round": 6,
     "date": "2026-05-11",
