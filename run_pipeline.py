@@ -117,6 +117,24 @@ def run_pipeline(date_str=None, verbose=False):
     if raw_data is None:
         return _finalize(result, verbose)
 
+    # Phase 22: Run Pydantic ingestion validation and ex-date validation
+    # These data quality gates existed in fetch_data.main() but were bypassed
+    # when the pipeline used fetch_all() directly.
+    from fetch_data import validate_ingested_data, _run_ex_date_validation
+
+    validate_ok = _run_stage(
+        "validate_ingested_data",
+        lambda **kw: validate_ingested_data(raw_data, verbose=verbose),
+        result,
+        verbose=verbose,
+    )
+    if validate_ok is False:
+        # validate_ingested_data returns False when >10% validation failures
+        result.mark_failed("validate_ingested_data", "Data quality too low (>10% validation failures)")
+        return _finalize(result, verbose)
+
+    _run_ex_date_validation(data_dir=DATA_DIR, verbose=verbose)
+
     save_meta = save_results(raw_data, date_str)
     if verbose:
         total_records = sum(save_meta.get("record_counts", {}).values())
