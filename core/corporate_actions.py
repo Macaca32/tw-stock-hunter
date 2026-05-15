@@ -42,32 +42,8 @@ TWSE_TIMEOUT = 15
 TWSE_RATE_LIMIT = 0.3  # seconds between requests
 
 
-def roc_date_to_iso(roc_date_str: str) -> Optional[str]:
-    """Convert ROC date string (e.g., '1150522') to ISO format (e.g., '2026-05-22').
-    
-    ROC year = year - 1911, so 115 = 2026.
-    """
-    if not roc_date_str or len(roc_date_str) < 7:
-        return None
-    try:
-        roc_year = int(roc_date_str[:3])
-        month = int(roc_date_str[3:5])
-        day = int(roc_date_str[5:7])
-        year = roc_year + 1911
-        return datetime(year, month, day).strftime("%Y-%m-%d")
-    except (ValueError, OverflowError):
-        return None
-
-
-def iso_to_roc_date(iso_date_str: str) -> Optional[str]:
-    """Convert ISO date string to ROC date string."""
-    if not iso_date_str:
-        return None
-    try:
-        dt = datetime.strptime(iso_date_str, "%Y-%m-%d")
-        return f"{dt.year - 1911:03d}{dt.month:02d}{dt.day:02d}"
-    except ValueError:
-        return None
+# Re-export ROC date helpers from holiday_calendar (single source of truth)
+from holiday_calendar import roc_date_to_iso, iso_to_roc_date
 
 
 class CorporateActionHandler:
