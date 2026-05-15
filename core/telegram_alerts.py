@@ -8,9 +8,11 @@ Features:
 - Significant score changes
 - Daily summary
 - Rate limiting to avoid spam
+- Phase 20: Actual message delivery via Telegram Bot API
 """
 
 import json
+import os
 from datetime import date, datetime
 from pathlib import Path
 
@@ -22,6 +24,10 @@ class TelegramAlerts:
         self.last_alert_file = self.data_dir / "last_alert.json"
         self.cooldown_minutes = 30  # Min time between alerts
 
+        # Phase 20: Telegram Bot API credentials from environment
+        self.bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+        self.chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+
         # Phase 15: Holiday calendar for alert suppression on non-trading days
         self.holiday_calendar = None
         try:
@@ -29,7 +35,64 @@ class TelegramAlerts:
             self.holiday_calendar = HolidayCalendar(str(self.data_dir))
         except ImportError:
             pass
-    
+
+    def send_message(self, message: str) -> bool:
+        """Send a message via Telegram Bot API.
+
+        Phase 20: Actual HTTP POST to Telegram's sendMessage endpoint.
+        Returns True on success, False on failure or missing credentials.
+        Gracefully degrades if TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID
+        are not configured — prints a warning but does not raise.
+        """
+        if not self.bot_token or not self.chat_id:
+            print("⚠ Telegram credentials not configured (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID)")
+            return False
+
+        import requests
+
+        url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+        payload = {
+            "chat_id": self.chat_id,
+            "text": message,
+            "parse_mode": "HTML",
+        }
+
+        try:
+            response = requests.post(url, json=payload, timeout=10)
+            if response.status_code == 200:
+                return True
+            else:
+                print(f"⚠ Telegram API error: HTTP {response.status_code} — {response.text[:200]}")
+                return False
+        except requests.exceptions.Timeout:
+            print("⚠ Telegram API: request timed out")
+            return False
+        except Exception as e:
+            print(f"⚠ Failed to send Telegram message: {e}")
+            return False
+
+    def deliver_alert(self, date_str=None, alert_type="daily") -> bool:
+        """Generate and deliver an alert via Telegram.
+
+        Phase 20: End-to-end delivery — generate_alert() + send_message().
+        Respects rate limiting via should_alert(). Records the alert on
+        success so cooldown logic works correctly.
+
+        Returns True if the alert was sent successfully, False otherwise.
+        """
+        if not self.should_alert(alert_type):
+            return False
+
+        message = self.generate_alert(date_str)
+        if not message:
+            return False
+
+        success = self.send_message(message)
+        if success:
+            self.record_alert(alert_type)
+            self.update_last_alert_with_regime()
+        return success
+
     def should_alert(self, alert_type="daily"):
         """Check if we should send an alert (rate limiting + holiday suppression)
 
@@ -209,20 +272,28 @@ class TelegramAlerts:
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Generate Telegram alerts")
+    parser = argparse.ArgumentParser(description="Generate and deliver Telegram alerts")
     parser.add_argument("--date", type=str, help="Date to alert (YYYY-MM-DD)")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
+    parser.add_argument("--dry-run", action="store_true", help="Generate alert but don't send")
     args = parser.parse_args()
     
     alerts = TelegramAlerts()
     message = alerts.generate_alert(date_str=args.date)
     
     if message:
-        if args.verbose:
+        if args.verbose or args.dry_run:
             print("📱 Telegram Alert:")
             print(message)
-        alerts.record_alert()
-        alerts.update_last_alert_with_regime()
+        
+        if args.dry_run:
+            print("\n(dry-run: message not sent)")
+        else:
+            sent = alerts.deliver_alert(date_str=args.date)
+            if sent:
+                print("✅ Alert delivered via Telegram")
+            else:
+                print("⚠ Alert not delivered (rate-limited, holiday, or missing credentials)")
     else:
         if args.verbose:
             print("❌ No alert generated")
