@@ -94,40 +94,76 @@ def _smooth_weights(prev_weights, new_weights, max_change):
     Sudden weight shifts can cause large score changes that trigger
     false signals. Smooth transitions give the system time to adapt.
     
+    Phase 20: Normalize FIRST to get target proportions, THEN clamp
+    changes to max_allowed and redistribute excess proportionally.
+    The old approach (clamp then normalize) broke intent because
+    normalization after clamping would undo the clamping effect.
+    
     Args:
         prev_weights: Previous day's weight dict
         new_weights: Target weight dict
-        max_change: Maximum fractional change per weight (0.05 = 5%)
+        max_change: Maximum absolute change per weight (0.05 = 5pp)
     
     Returns:
-        Smoothed weight dict
+        Smoothed weight dict (values sum to 1.0)
     """
+    # Step 1: Normalize inputs to ensure they sum to 1.0
+    def _normalize(w):
+        total = sum(w.values())
+        return {k: v / total for k, v in w.items()} if total > 0 else w
+
+    prev_norm = _normalize(prev_weights)
+    new_norm = _normalize(new_weights)
+
+    # Step 2: Clamp each weight's change to max_allowed
+    min_weight = 0.05  # Floor: no weight below 5%
+    max_weight = 0.50  # Ceiling: no weight above 50%
+
     smoothed = {}
-    
-    for key in new_weights:
-        if key not in prev_weights:
-            smoothed[key] = new_weights[key]
+    clamped_keys = set()
+
+    for key in new_norm:
+        if key not in prev_norm:
+            # New key — accept as-is, will be normalized later
+            smoothed[key] = new_norm[key]
             continue
-        
-        prev_val = prev_weights[key]
-        new_val = new_weights[key]
-        
-        # Calculate max allowed change
+
+        prev_val = prev_norm[key]
+        new_val = new_norm[key]
         change = new_val - prev_val
-        max_allowed = max_change
-        
-        if abs(change) <= max_allowed:
+
+        if abs(change) <= max_change:
             smoothed[key] = new_val
         else:
-            # Clamp change to max allowed
+            # Clamp change to max_allowed
             direction = 1 if change > 0 else -1
-            smoothed[key] = prev_val + direction * max_allowed
-    
-    # Normalize to sum to 1.0
+            smoothed[key] = prev_val + direction * max_change
+            clamped_keys.add(key)
+
+    # Step 3: Apply floor/ceiling constraints and track excess
+    for key in smoothed:
+        if smoothed[key] < min_weight:
+            smoothed[key] = min_weight
+            clamped_keys.add(key)
+        elif smoothed[key] > max_weight:
+            smoothed[key] = max_weight
+            clamped_keys.add(key)
+
+    # Step 4: Redistribute excess/deficit among unconstrained weights
+    total = sum(smoothed.values())
+    if total > 0 and abs(total - 1.0) > 1e-6:
+        unconstrained = {k for k in smoothed if k not in clamped_keys}
+        if unconstrained:
+            diff = 1.0 - total
+            per_key = diff / len(unconstrained)
+            for key in unconstrained:
+                smoothed[key] = max(min_weight, smoothed[key] + per_key)
+
+    # Step 5: Final normalization to ensure sum == 1.0
     total = sum(smoothed.values())
     if total > 0:
         smoothed = {k: v / total for k, v in smoothed.items()}
-    
+
     return smoothed
 
 
