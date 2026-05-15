@@ -675,11 +675,13 @@ def score_institutional_flow(stock_code, flow_data, margin_data,
     return 25  # Neutral if no data
 
 
-def score_technical_momentum(stock_code, daily_data, pe_data=None, price_history=None):
+def score_technical_momentum(stock_code, daily_data, pe_data=None, price_history=None,
+                            daily_index=None):
     """Score technical momentum using available data (0-100)
     
     With historical data: uses 20-day MA, RSI, volume trend
     Without: falls back to single-day proxy
+    Phase 22: Accept pre-built daily_index for O(1) lookup.
     """
     # Try historical data first
     if price_history and stock_code in price_history:
@@ -691,7 +693,7 @@ def score_technical_momentum(stock_code, daily_data, pe_data=None, price_history
             return _score_momentum_short_history(history)
     
     # Fallback: single-day proxy
-    return _score_momentum_single_day(stock_code, daily_data)
+    return _score_momentum_single_day(stock_code, daily_data, daily_index=daily_index)
 
 
 def _score_momentum_with_history(history):
@@ -807,14 +809,19 @@ def _score_momentum_short_history(history):
         return 25
 
 
-def _score_momentum_single_day(stock_code, daily_data):
-    """Score momentum with only single-day data (fallback)"""
-    # Find stock in daily data
-    stock_daily = None
-    for d in daily_data:
-        if get_field(d, "證券代號", "Code", "") == stock_code:
-            stock_daily = d
-            break
+def _score_momentum_single_day(stock_code, daily_data, daily_index=None):
+    """Score momentum with only single-day data (fallback)
+    Phase 22: Accept pre-built daily_index for O(1) lookup.
+    """
+    # Phase 22: O(1) index lookup instead of O(n) linear scan
+    if daily_index is not None:
+        stock_daily = daily_index.get(stock_code)
+    else:
+        stock_daily = None
+        for d in daily_data:
+            if get_field(d, "證券代號", "Code", "") == stock_code:
+                stock_daily = d
+                break
     
     if not stock_daily:
         return 25  # Not found
