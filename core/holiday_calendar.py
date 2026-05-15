@@ -165,15 +165,19 @@ class HolidayCalendar:
         if dt.weekday() >= 5:
             return False
 
-        # Check holidays
-        if date_str in self._closed_dates or date_str in self._partial_dates:
+        # Check full holidays only (half-day sessions ARE trading days)
+        if date_str in self._closed_dates:
             return False
 
         return True
 
     def is_holiday(self, date_str: str) -> bool:
-        """Check if a given ISO date is a TWSE holiday."""
-        return date_str in self._closed_dates or date_str in self._partial_dates
+        """Check if a given ISO date is a TWSE holiday (full closure only).
+
+        Half-day sessions are NOT holidays — the market is open, just shorter.
+        Use is_half_day() to check for half-day sessions.
+        """
+        return date_str in self._closed_dates
 
     def is_half_day(self, date_str: str) -> bool:
         """Check if a given ISO date has a half-day session (morning only).

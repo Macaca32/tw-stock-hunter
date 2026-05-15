@@ -378,12 +378,16 @@ class TestHolidayCalendar:
         # Jan 23 (Fri), Jan 26 (Mon), Feb 2 (Mon) = 3
         assert count == 3
 
-    def test_half_day_is_not_trading_day(self):
-        """Half-day sessions are classified as non-trading days by is_trading_day."""
+    def test_half_day_is_trading_day(self):
+        """Half-day sessions ARE trading days — market is open, just shorter hours.
+
+        Previous bug: half-day sessions were treated as non-trading days,
+        which caused wrong holding-day counts and false post-holiday gap detection.
+        """
         cal = self._make_calendar_with_holidays(
             partial_dates=["2026-02-04"]  # Half day (LNY eve)
         )
-        assert not cal.is_trading_day("2026-02-04")
+        assert cal.is_trading_day("2026-02-04")
 
     def test_invalid_date_returns_false(self):
         """Invalid date string should return False."""
