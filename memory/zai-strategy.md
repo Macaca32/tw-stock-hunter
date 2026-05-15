@@ -2,7 +2,7 @@
 
 ## New Workflow: Z.ai Codes, Crabby Reviews
 
-**Session URL:** `https://chat.z.ai/c/765b3d3f-061c-45cb-b448-7a52ba30d1c5` (read from `.zai-chat-url`)
+**Session URL:** `https://chat.z.ai/c/949ec56b-f2fa-438a-ae1b-ca1e0cdc9a56` (read from `.zai-chat-url`)
 **Mode:** Agent mode — Z.ai has full GitHub repo access, can commit/push/pull
 
 ### How It Works
