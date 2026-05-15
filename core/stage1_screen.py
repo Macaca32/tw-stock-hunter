@@ -269,11 +269,11 @@ def check_hard_filters(stock, company_info, datasets, thresholds, price_history=
         shares_outstanding = paid_in / 10.0 if paid_in > 0 else 0
         market_cap = close * shares_outstanding
 
-        # Determine if TPEx or TWSE (TPEx codes >= 9900 or in 6xxx range)
+        # Determine if TPEx or TWSE (TPEx codes >= 9900 or in 6xxx-7xxx range)
         is_tpex = False
         try:
             code_int = int(stock_code)
-            if code_int >= 9900 or (6000 <= code_int <= 6999):
+            if code_int >= 9900 or (6000 <= code_int <= 7999):
                 is_tpex = True
         except:
             pass
