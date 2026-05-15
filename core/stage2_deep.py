@@ -447,16 +447,16 @@ def run_stage2(date_str=None, verbose=False):
         red_flags = []
         
         if thresholds["stage2"].get("red_flag_disqualify", True):
-            # Pledge risk: score < 40 means high pledge
-            if pledge_score < 40:
+            # Pledge risk: score < 40 means high pledge (skip if score is None from error)
+            if pledge_score is not None and pledge_score < 40:
                 red_flags.append(f"High pledge risk (score={pledge_score}, status={pledge_status})")
-            
+
             # Recent penalties: score < 50 means concerning
-            if penalty_score < 50:
+            if penalty_score is not None and penalty_score < 50:
                 red_flags.append(f"Penalty risk (score={penalty_score}, status={penalty_status})")
-            
+
             # Negative announcements: score < 30 means serious issues
-            if ann_score < 30:
+            if ann_score is not None and ann_score < 30:
                 red_flags.append(f"Negative announcements (score={ann_score}, status={ann_status})")
         
         if red_flags:
@@ -480,18 +480,20 @@ def run_stage2(date_str=None, verbose=False):
             continue
         
         # Weighted Stage 2 score — load from config, fall back to hardcoded defaults
+        # Replace None scores with neutral 50 (not 0 or 25) to avoid distorting the average
         stage2_weights = weights.get("stage2", {})
         w_div = stage2_weights.get("dividend", 0.25)
         w_ann = stage2_weights.get("announcements", 0.20)
         w_sh  = stage2_weights.get("shareholders", 0.15)
         w_plg = stage2_weights.get("pledge", 0.20)
         w_pen = stage2_weights.get("penalties", 0.20)
+        _safe = lambda s: s if s is not None else 50.0
         fundamental_score = (
-            div_score * w_div +
-            ann_score * w_ann +
-            sh_score * w_sh +
-            pledge_score * w_plg +
-            penalty_score * w_pen
+            _safe(div_score) * w_div +
+            _safe(ann_score) * w_ann +
+            _safe(sh_score) * w_sh +
+            _safe(pledge_score) * w_plg +
+            _safe(penalty_score) * w_pen
         )
         
         result = {
