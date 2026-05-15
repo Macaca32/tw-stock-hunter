@@ -622,10 +622,14 @@ class CorporateActionHandler:
 
     def adjust_price_for_dividend(self, price: float, stock_code: str, date_str: str) -> float:
         """Adjust a single price for ex-dividend drop.
-        
+
         On ex-date, the stock price drops by the dividend amount.
         This adjustment prevents false crash signals.
-        
+
+        For cash dividends: add back the cash_div to the price.
+        For stock dividends: the price is diluted by (1 + stock_div/10).
+        We reverse this by multiplying by (1 + stock_div/10).
+
         Returns: adjusted price (or original if no ex-dividend)
         """
         action = self.get_action_on_date(stock_code, date_str)
@@ -634,8 +638,14 @@ class CorporateActionHandler:
             cash_div = action.get("cash_div", 0) or 0
             stock_div = action.get("stock_div", 0) or 0
 
-            if cash_div > 0:
+            if cash_div > 0 and stock_div > 0:
+                # Combined: reverse both cash drop and dilution
+                return (price + cash_div) * (1.0 + stock_div / 10.0)
+            elif cash_div > 0:
                 return price + cash_div  # Add back the dividend drop
+            elif stock_div > 0:
+                # Stock dividend dilutes price; reverse by multiplying
+                return price * (1.0 + stock_div / 10.0)
 
         return price
 
