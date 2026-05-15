@@ -468,6 +468,8 @@ def get_regime_position_mult(regime):
     - BLACK_SWAN: 0.0x (no new positions)
     """
     # Phase 3: Direct mapping, no config lookup needed
+    # Phase 22: Unknown regime defaults to 0.0 (no new positions) for safety.
+    # Previously defaulted to 0.6 which could cause unwanted trading on data failures.
     mult_map = {
         "normal": 1.0,
         "caution": 0.6,
@@ -475,7 +477,7 @@ def get_regime_position_mult(regime):
         "crisis": 0.1,
         "black_swan": 0.0,
     }
-    return mult_map.get(regime, 0.6)
+    return mult_map.get(regime, 0.0)
 
 
 def detect_regime_from_prices(prices, prev_regime_data=None, config=None):

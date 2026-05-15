@@ -427,6 +427,8 @@ class PaperTrader:
             return float(mult)
 
         # Defaults MUST match Phase 3 regime_detector.py
+        # Phase 22: Unknown regime defaults to 0.0 (no new positions) for safety.
+        # Previously defaulted to 1.0 which could cause unwanted trading on data failures.
         DEFAULTS = {
             'normal': 1.0,
             'caution': 0.6,
@@ -434,7 +436,7 @@ class PaperTrader:
             'crisis': 0.1,
             'black_swan': 0.0,
         }
-        return DEFAULTS.get(regime.lower(), 1.0)
+        return DEFAULTS.get(regime.lower(), 0.0)
 
     # ------------------------------------------------------------------ #
     #  Phase 10 R8: Holiday-aware helpers
