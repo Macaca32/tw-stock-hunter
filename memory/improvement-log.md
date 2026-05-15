@@ -15,7 +15,29 @@
 ---
 *Previous phases 0-20 detailed logs: see git history and memory/2026-05-*.md*
 
-## Phase 22 Complete (2026-05-15) — Full Repo Re-review
+## Phase 23 Complete (2026-05-16) — SQLite Data Layer
+**Commit:** `6135a93` — feat: Phase 23 — SQLite data layer (~1857 lines total)
+
+### New Files:
+- **`core/datastore.py`** (~1190 lines) — SQLite data layer with migration + query helpers
+- **`tests/test_datastore.py`** (~667 lines) — 44 unit tests, all pass
+
+### Implementation Review ✅
+- **Schema:** 4 tables (stocks_daily, corporate_actions, regime_snapshots, portfolio_history) with proper indexes, WITHOUT ROWID for efficiency
+- **Migration:** Idempotent via INSERT OR IGNORE; Taiwan-specific: ROC date conversion (+1911), TWT49U priority over dividends_*.json, special share class filtering (B/R suffixes), Chinese field name fallbacks (開盤價, 收盤價)
+- **Query helpers:** 8 functions covering all tables with readonly connections and proper cleanup
+- **Tests:** All 80 pass (36 existing + 44 new) — schema init, migration idempotency, query helpers, edge cases
+- **TAIEX proxy:** Top-20 volume stocks average — reasonable approximation
+
+### Pipeline Test: ⚠️ Pre-existing Bug Found
+Pipeline failed at `stage1_screen`: `score_technical_momentum()` got unexpected keyword argument `'daily_index'`
+- Root cause: Phase 22 commit `0e91317` added `daily_index=daily_index` to function call but didn't update signature
+- **Not a Phase 23 issue** — datastore.py not yet called by pipeline
+- Feedback for next Z.ai iteration: fix this regression
+
+### Dry Run Test: PASSED ✅ (all 80 tests, exit code 0)
+
+## Phase 24 In Progress — Regression Fix + Pipeline Integration
 **12 commits total** (both old session while I was stuck on git conflicts + new session after my prompt)
 
 ### Old Session Commits (56475c9..c0dc838):

@@ -1,8 +1,7 @@
 {
-  "current_phase": 23,
-  "phase_name": "SQLite data layer — read-only view on top of existing JSON data files",
-  "started_at": "2026-05-15T22:30:00+08:00",
-  "completed_at": "2026-05-16T12:00:00+08:00",
+  "current_phase": 24,
+  "phase_name": "Regression fix (stage1 daily_index), pipeline integration, backtest reporting",
+  "started_at": "2026-05-16T06:30:00+08:00",
   "completed_phases": [
     {
       "phase": 0,
