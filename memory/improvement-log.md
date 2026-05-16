@@ -169,3 +169,53 @@ All fixes approved. Key Taiwan-market correctness verified:
 
 ### Dry Run Test: PASSED ✅ (all 80 tests)
 
+
+## Phase 27 Complete (2026-05-16) — Signal Quality Scoring
+**Commits:** `12d0f7d`, `3c9daff`, `754eeed`, `1e4f38e`
+
+### Enhancement #1: Composite Signal Strength Metric ✅
+- New function: `compute_signal_strength(scores, composite_score, weights_dict)` → 0-100 continuous score
+- Components: magnitude (60%), alignment (25%), breadth (15%)
+- Returns: strength, conviction level (very_high→very_low), grade (A+→D), dominant dimension, alignment ratio
+- **Review:** Clean weighted blend. Alignment metric uses variance-based formula normalized to 0-1. Breadth counts dimensions ≥40 as contributing. Conviction/grade tiers provide actionable signal quality ✅
+
+### Enhancement #2: Per-Dimension Confidence Intervals ✅
+- New function: `compute_signal_confidence()` → confidence score (0-100) + influencing factors per dimension
+- Technical confidence: history length bonus (>252d=+25, >60d=+15), missing data penalty (-30% for >10% gaps)
+- Fundamental confidence: PE/PB/Dividend data availability (+10/+10/+5 each), company info freshness
+- Momentum confidence: regime-aware reduction (stress=-10, crisis=-20, black_swan=-30)
+- Flow confidence: flow data availability checks
+- Revenue confidence: YoY data consistency check
+- **Review:** Comprehensive data quality scoring. Regime-aware momentum confidence is particularly useful for Taiwan markets ✅
+
+### Enhancement #3: Regime-Aware Dynamic Thresholds ✅
+- New function: `get_regime_adjusted_thresholds(regime, base_thresholds)` → adjusted pass/watchlist thresholds
+- NORMAL/CAUTION: standard (no change)
+- STRESS: +15 points to both thresholds
+- CRISIS: pass=80, watchlist=65
+- BLACK_SWAN: pass=100 (unreachable), effectively pauses screening
+- **Review:** Correct implementation per spec. Note: current market is in CRISIS regime → only 2 candidates pass (down from ~63). This is intentional risk management — during crisis conditions, only the strongest signals should be acted upon ✅
+
+### Enhancement #4: False Signal Detection ✅
+- New function: `detect_false_signals()` → flags list + is_contradictory boolean
+- Contrarian flag: high technical (≥70) but weak fundamentals (<35 avg)
+- Fading momentum: strong momentum with declining volume (ratio <0.6 = high, <0.8 = medium)
+- Unconfirmed momentum: price up but institutional flow down
+- Revenue-price divergence: fundamental disconnect detection
+- Ex-dividend gap awareness: recent corporate action within 30 days adjusts expectations
+- **Review:** Comprehensive cross-dimension contradiction detection. Volume analysis uses adj_volume with proper NULL-safe fallbacks ✅
+
+### Taiwan-market Correctness:
+- All TWSE date format handling preserved (ROC +1911 conversion)
+- Ex-dividend check uses `parse_twse_date()` helper
+- Volume lookups use None-safe `or` chain pattern from Phase 25 fix
+- Regime names match tiered system (normal/caution/stress/crisis/black_swan) ✅
+
+### Pipeline Test Results:
+```
+✓ PIPELINE COMPLETE — 9/9 stages successful (37.5s)
+  ✓ stage1_screen: 1.9s (2 passed, 39 watchlist, 1318 rejected)
+    Note: Low pass count due to CRISIS regime thresholds (pass=80)
+```
+
+### Dry Run Test: PASSED ✅ (all 80 tests)

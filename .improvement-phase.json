@@ -1,7 +1,7 @@
 {
-  "current_phase": 27,
-  "phase_name": "Signal quality scoring — composite signal strength metric with confidence intervals, regime-aware thresholds, and false-signal detection",
-  "started_at": "2026-05-16T11:30:00+08:00",
+  "current_phase": 28,
+  "phase_name": "Portfolio rebalancing engine — position sizing optimization, sector rotation signals, and correlation-based risk budgeting",
+  "started_at": "2026-05-16T13:00:00+08:00",
   "completed_phases": [
     {
       "phase": 0,
@@ -193,6 +193,14 @@
       "completed_at": "2026-05-16T11:30:00+08:00",
       "summary": "Three new methods added to PaperTrader: run_multi_period_backtest() splits backtest into N contiguous periods with consistency scoring; compute_sector_adjusted_returns() computes alpha vs equal-weight sector benchmark proxy; compute_drawdown_analysis() tracks peak-to-trough drawdown with recovery metrics. Refactored _run_backtest_on_files() and _simulate_trade_exit() for reuse. All backward compatible.",
       "commit": "7b0aa1c, 950303c, 80788dc"
+    },
+    {
+      "phase": 27,
+      "name": "Signal quality scoring — composite signal strength, confidence intervals, regime-aware thresholds, false-signal detection",
+      "started_at": "2026-05-16T11:30:00+08:00",
+      "completed_at": "2026-05-16T13:00:00+08:00",
+      "summary": "Four new functions added to stage1_screen.py (now 1745 lines): compute_signal_strength() returns continuous 0-100 score with conviction grade and alignment metric; compute_signal_confidence() scores data quality per dimension with regime-aware momentum reduction; get_regime_adjusted_thresholds() raises pass/watchlist thresholds for stress/crisis/black_swan regimes (CRISIS: pass=80); detect_false_signals() flags contrarian positions, fading momentum, unconfirmed price action, revenue-price divergence, and ex-dividend gaps. stage2_deep.py updated to consume new fields.",
+      "commit": "12d0f7d, 3c9daff, 754eeed, 1e4f38e"
     }
   ],
   "notes": "Phase 23 done. SQLite data layer provides efficient historical queries and cumulative tracking on top of existing JSON data files.",
