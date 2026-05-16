@@ -879,6 +879,278 @@ def _score_momentum_single_day(stock_code, daily_data, daily_index=None):
         return 25
 
 
+def compute_gap_fill_probability(price_history, stock_code):
+    """Phase 30: Analyze historical gap patterns and compute gap-fill probability.
+
+    For each stock, analyzes adjusted close price history to identify gaps
+    (today's open vs previous close) and compute:
+      (a) Percentage of gaps filled within 5/10/20 trading days
+      (b) Average fill time in days for gaps that did fill
+      (c) Current gap size relative to historical median gap
+
+    Uses adjusted prices (Phase 2) so ex-dividend gaps are handled correctly.
+    In Taiwan, TWSE/TPEx have daily 10% price limits which affect gap behavior.
+
+    Returns dict with:
+        fill_pct_5d: float — % of historical gaps filled within 5 trading days
+        fill_pct_10d: float — % filled within 10 trading days
+        fill_pct_20d: float — % filled within 20 trading days
+        avg_fill_days: float — Average days to fill (for gaps that filled)
+        current_gap_pct: float — Current gap size as % of price (0 if no gap)
+        gap_vs_median: float — Current gap / historical median gap ratio
+        timing_adjustment: float — Score adjustment (-10 to +10)
+            High fill probability → wait for confirmation (negative adjustment)
+            Low fill probability → gap likely persists (positive for direction)
+        total_gaps_analyzed: int — Number of historical gaps found
+    """
+    EMPTY_RESULT = {
+        "fill_pct_5d": 0.0, "fill_pct_10d": 0.0, "fill_pct_20d": 0.0,
+        "avg_fill_days": 0.0, "current_gap_pct": 0.0, "gap_vs_median": 0.0,
+        "timing_adjustment": 0.0, "total_gaps_analyzed": 0,
+    }
+
+    if not price_history or stock_code not in price_history:
+        return EMPTY_RESULT
+
+    history = price_history[stock_code]
+    if not history or len(history) < 10:
+        return EMPTY_RESULT
+
+    try:
+        # Build adjusted close list with opens
+        closes = []
+        opens = []
+        for h in history:
+            c = h.get("adj_close") or h.get("close") or 0
+            o = h.get("open") or c  # Fallback to close if no open
+            if c > 0:
+                closes.append(c)
+                opens.append(o)
+
+        if len(closes) < 10:
+            return EMPTY_RESULT
+
+        # Identify gaps: today's open vs previous close
+        gap_sizes = []  # Absolute gap sizes as % of price
+        gap_records = []  # (gap_pct, filled_in_N_days or None)
+
+        for i in range(1, len(closes)):
+            prev_close = closes[i - 1]
+            curr_open = opens[i]
+            if prev_close <= 0:
+                continue
+
+            gap_pct = (curr_open - prev_close) / prev_close * 100
+
+            # Only count meaningful gaps (> 0.5% — skip noise)
+            if abs(gap_pct) < 0.5:
+                continue
+
+            gap_sizes.append(abs(gap_pct))
+
+            # Check if gap filled within 5/10/20 days
+            # Gap up fills if price drops back to prev_close
+            # Gap down fills if price rises back to prev_close
+            filled_at = None
+            for j in range(i, min(i + 20, len(closes))):
+                if gap_pct > 0:  # Gap up — fills when close <= prev_close
+                    if closes[j] <= prev_close:
+                        filled_at = j - i + 1
+                        break
+                else:  # Gap down — fills when close >= prev_close
+                    if closes[j] >= prev_close:
+                        filled_at = j - i + 1
+                        break
+
+            gap_records.append({
+                "gap_pct": gap_pct,
+                "abs_gap_pct": abs(gap_pct),
+                "filled_at": filled_at,  # None = not filled within 20 days
+            })
+
+        if not gap_records:
+            return EMPTY_RESULT
+
+        # Compute fill statistics
+        total_gaps = len(gap_records)
+        filled_5d = sum(1 for g in gap_records if g["filled_at"] is not None and g["filled_at"] <= 5)
+        filled_10d = sum(1 for g in gap_records if g["filled_at"] is not None and g["filled_at"] <= 10)
+        filled_20d = sum(1 for g in gap_records if g["filled_at"] is not None and g["filled_at"] <= 20)
+        filled_ever = [g["filled_at"] for g in gap_records if g["filled_at"] is not None]
+
+        fill_pct_5d = round(filled_5d / total_gaps * 100, 1) if total_gaps > 0 else 0
+        fill_pct_10d = round(filled_10d / total_gaps * 100, 1) if total_gaps > 0 else 0
+        fill_pct_20d = round(filled_20d / total_gaps * 100, 1) if total_gaps > 0 else 0
+        avg_fill_days = round(sum(filled_ever) / len(filled_ever), 1) if filled_ever else 0
+
+        # Current gap
+        current_gap_pct = 0.0
+        if len(closes) >= 2 and opens:
+            prev_close = closes[-2] if len(closes) >= 2 else 0
+            curr_open = opens[-1] if opens else 0
+            if prev_close > 0:
+                current_gap_pct = round((curr_open - prev_close) / prev_close * 100, 2)
+
+        # Gap vs historical median
+        gap_vs_median = 0.0
+        if gap_sizes:
+            sorted_gaps = sorted(gap_sizes)
+            n = len(sorted_gaps)
+            median_gap = sorted_gaps[n // 2] if n % 2 == 1 else (sorted_gaps[n // 2 - 1] + sorted_gaps[n // 2]) / 2
+            if median_gap > 0 and abs(current_gap_pct) > 0:
+                gap_vs_median = round(abs(current_gap_pct) / median_gap, 2)
+
+        # Timing adjustment: high fill probability → wait for confirmation
+        # Low fill probability → gap likely persists (directional conviction)
+        timing_adjustment = 0.0
+        if abs(current_gap_pct) > 0.5:
+            # If gaps usually fill quickly, reduce confidence in gap direction
+            if fill_pct_5d > 70:
+                timing_adjustment = -8.0  # High fill rate → wait
+            elif fill_pct_5d > 50:
+                timing_adjustment = -4.0  # Moderate fill rate → slight caution
+            elif fill_pct_10d > 60:
+                timing_adjustment = -3.0  # Eventually fills → mild caution
+            else:
+                timing_adjustment = 3.0  # Gaps tend to persist → directional conviction
+
+        return {
+            "fill_pct_5d": fill_pct_5d,
+            "fill_pct_10d": fill_pct_10d,
+            "fill_pct_20d": fill_pct_20d,
+            "avg_fill_days": avg_fill_days,
+            "current_gap_pct": current_gap_pct,
+            "gap_vs_median": gap_vs_median,
+            "timing_adjustment": round(timing_adjustment, 1),
+            "total_gaps_analyzed": total_gaps,
+        }
+    except Exception as e:
+        logger.debug("[Stage1] compute_gap_fill_probability failed for %s: %r", stock_code, e)
+        return EMPTY_RESULT
+
+
+def detect_volume_anomalies(price_history, stock_code):
+    """Phase 30: Detect volume anomalies by comparing current volume to rolling median.
+
+    Compares the most recent trading day's volume against a 20-day rolling
+    median and flags:
+      (a) volume > 3x median = institutional interest signal
+      (b) volume < 0.3x median = low conviction signal
+      (c) relative volume trend over last 5 days (increasing/decreasing/stable)
+
+    Uses adjusted volumes (Phase 2) for consistency.
+
+    Returns dict with:
+        relative_volume: float — Current volume / 20-day median
+        anomaly_type: str — "institutional" / "low_conviction" / "normal"
+        volume_trend: str — "increasing" / "decreasing" / "stable"
+        trend_strength: float — Rate of volume change over last 5 days
+        score_adjustment: float — Composite score adjustment (-5 to +5)
+        median_volume: float — 20-day median volume
+        current_volume: float — Most recent day's volume
+    """
+    EMPTY_RESULT = {
+        "relative_volume": 1.0, "anomaly_type": "normal",
+        "volume_trend": "stable", "trend_strength": 0.0,
+        "score_adjustment": 0.0, "median_volume": 0, "current_volume": 0,
+    }
+
+    if not price_history or stock_code not in price_history:
+        return EMPTY_RESULT
+
+    history = price_history[stock_code]
+    if not history or len(history) < 5:
+        return EMPTY_RESULT
+
+    try:
+        # Extract adjusted volumes
+        volumes = []
+        for h in history:
+            vol = h.get("adj_volume") or h.get("volume") or 0
+            if vol > 0:
+                volumes.append(vol)
+
+        if len(volumes) < 5:
+            return EMPTY_RESULT
+
+        current_volume = volumes[-1]
+
+        # Compute 20-day median (or whatever is available)
+        window = min(20, len(volumes) - 1)  # Exclude current day
+        if window < 5:
+            return EMPTY_RESULT
+
+        recent_volumes = volumes[-(window + 1):-1]  # Exclude current
+        sorted_vols = sorted(recent_volumes)
+        n = len(sorted_vols)
+        median_volume = sorted_vols[n // 2] if n % 2 == 1 else (sorted_vols[n // 2 - 1] + sorted_vols[n // 2]) / 2
+
+        if median_volume <= 0:
+            return EMPTY_RESULT
+
+        relative_volume = current_volume / median_volume
+
+        # Determine anomaly type
+        anomaly_type = "normal"
+        if relative_volume > 3.0:
+            anomaly_type = "institutional"  # 3x+ volume = institutional interest
+        elif relative_volume < 0.3:
+            anomaly_type = "low_conviction"  # < 0.3x volume = low conviction
+
+        # Volume trend over last 5 days
+        volume_trend = "stable"
+        trend_strength = 0.0
+        if len(volumes) >= 5:
+            last5 = volumes[-5:]
+            # Simple linear regression slope for trend
+            x_vals = list(range(len(last5)))
+            x_mean = sum(x_vals) / len(x_vals)
+            y_mean = sum(last5) / len(last5)
+            numerator = sum((x - x_mean) * (y - y_mean) for x, y in zip(x_vals, last5))
+            denominator = sum((x - x_mean) ** 2 for x in x_vals)
+
+            if denominator > 0 and y_mean > 0:
+                slope = numerator / denominator
+                trend_strength = round(slope / y_mean * 100, 2)  # % change per day
+
+                if trend_strength > 5.0:
+                    volume_trend = "increasing"
+                elif trend_strength < -5.0:
+                    volume_trend = "decreasing"
+                else:
+                    volume_trend = "stable"
+
+        # Score adjustment
+        score_adjustment = 0.0
+
+        # Institutional volume (>3x) = strong signal, boost score
+        if anomaly_type == "institutional":
+            score_adjustment = min(5.0, 2.0 + (relative_volume - 3.0) * 0.5)
+
+        # Low conviction volume (<0.3x) = weak signal, reduce score
+        elif anomaly_type == "low_conviction":
+            score_adjustment = max(-5.0, -2.0 + (relative_volume - 0.3) * 5.0)
+
+        # Volume trend bonus/penalty
+        if volume_trend == "increasing" and anomaly_type != "low_conviction":
+            score_adjustment += 1.5  # Rising volume supports the signal
+        elif volume_trend == "decreasing" and anomaly_type != "institutional":
+            score_adjustment -= 1.0  # Falling volume undermines the signal
+
+        return {
+            "relative_volume": round(relative_volume, 2),
+            "anomaly_type": anomaly_type,
+            "volume_trend": volume_trend,
+            "trend_strength": trend_strength,
+            "score_adjustment": round(max(-5.0, min(5.0, score_adjustment)), 1),
+            "median_volume": round(median_volume, 0),
+            "current_volume": round(current_volume, 0),
+        }
+    except Exception as e:
+        logger.debug("[Stage1] detect_volume_anomalies failed for %s: %r", stock_code, e)
+        return EMPTY_RESULT
+
+
 def compute_signal_strength(scores, composite_score, weights_dict):
     """Phase 27: Compute continuous signal strength metric (0-100).
 
@@ -1634,21 +1906,39 @@ def run_stage1(date_str=None, verbose=False):
             datasets=datasets, dividends_index=dividends_index,
         )
 
+        # Phase 30: Market microstructure analysis
+        gap_fill = compute_gap_fill_probability(price_history, code)
+        vol_anomaly = detect_volume_anomalies(price_history, code)
+
+        # Phase 30: Apply microstructure adjustments to composite score
+        micro_adjustment = 0.0
+        micro_adjustment += gap_fill.get("timing_adjustment", 0.0)
+        micro_adjustment += vol_anomaly.get("score_adjustment", 0.0)
+        # Cap total microstructure adjustment to ±10 points
+        micro_adjustment = max(-10.0, min(10.0, micro_adjustment))
+        adjusted_composite = composite + micro_adjustment
+
         result = {
             "code": code,
             "name": name,
             "close": float(get_field(stock, "收盤價", "ClosingPrice", 0)),
-            "composite_score": round(composite, 1),
+            "composite_score": round(adjusted_composite, 1),
+            "composite_raw": round(composite, 1),  # Before microstructure adjustments
             "score_breakdown": scores,
             "signal_strength": signal_strength,
             "signal_confidence": signal_confidence,
             "false_signals": false_signals,
-            "pass": composite >= effective_pass
+            "microstructure": {
+                "gap_fill": gap_fill,
+                "volume_anomaly": vol_anomaly,
+                "micro_adjustment": round(micro_adjustment, 1),
+            },
+            "pass": adjusted_composite >= effective_pass
         }
         
-        if composite >= effective_pass:
+        if adjusted_composite >= effective_pass:
             candidates.append(result)
-        elif composite >= effective_watch:
+        elif adjusted_composite >= effective_watch:
             watchlist.append(result)
         else:
             rejected.append(result)
