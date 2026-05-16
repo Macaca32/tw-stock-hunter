@@ -2,7 +2,7 @@
 """
 Pipeline Runner — Orchestrates the full tw-stock-hunter pipeline
 
-Chains: fetch_data → fetch_history → detect_regime → db_migrate → stage1_screen → stage2_deep → paper_trader → telegram_alerts
+Chains: fetch_data → fetch_history → detect_regime → db_migrate → stage1_screen → stage2_deep → paper_trader → telegram_alerts → report_generator
 
 Usage:
     python run_pipeline.py                       # Run for today
@@ -274,6 +274,36 @@ def run_pipeline(date_str=None, verbose=False):
         status = "sent" if alert_result.get("alert_sent") else "skipped"
         print(f"   Alert: {status}")
 
+    # ── Stage 10: Report Generator ───────────────────────────────────
+    # Phase 32: Generate Markdown/HTML daily reports combining all
+    # pipeline outputs. Runs after all other stages so it has access
+    # to the full set of results. Backward compatible — if upstream
+    # data is missing, the report gracefully skips those sections.
+    from report_generator import generate_daily_report, generate_html_report
+
+    def _run_report_generator(**kw):
+        reports_dir = str(REPO_ROOT / "reports")
+        md_report = generate_daily_report(date_str, output_dir=reports_dir)
+        # Also generate HTML variant
+        html_report = generate_html_report(date_str, output_dir=reports_dir)
+        return {
+            "md_generated": md_report is not None,
+            "html_generated": html_report is not None,
+            "md_length": len(md_report) if md_report else 0,
+            "html_length": len(html_report) if html_report else 0,
+        }
+
+    report_result = _run_stage(
+        "report_generator",
+        _run_report_generator,
+        result,
+        verbose=verbose,
+    )
+    if verbose and report_result:
+        md_ok = "✓" if report_result.get("md_generated") else "✗"
+        html_ok = "✓" if report_result.get("html_generated") else "✗"
+        print(f"   Report: MD {md_ok} | HTML {html_ok}")
+
     return _finalize(result, verbose)
 
 
@@ -342,14 +372,15 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Pipeline stages:
-  1. fetch_data      — Fetch TWSE data (daily, PE, revenue, etc.)
-  2. fetch_history   — Build historical price data
-  3. detect_regime   — Detect market regime
-  4. db_migrate      — Migrate JSON data to SQLite (Phase 25)
-  5. stage1_screen   — Quantitative pre-screen
-  6. stage2_deep     — Fundamental deep-dive
-  7. paper_trader    — Paper trading simulation
-  8. telegram_alerts — Send alerts (if enabled)
+  1.  fetch_data      — Fetch TWSE data (daily, PE, revenue, etc.)
+  2.  fetch_history   — Build historical price data
+  3.  detect_regime   — Detect market regime
+  4.  db_migrate      — Migrate JSON data to SQLite (Phase 25)
+  5.  stage1_screen   — Quantitative pre-screen
+  6.  stage2_deep     — Fundamental deep-dive
+  7.  paper_trader    — Paper trading simulation
+  8.  telegram_alerts — Send alerts (if enabled)
+  10. report_generator — Generate Markdown/HTML daily reports (Phase 32)
 """,
     )
     parser.add_argument(
