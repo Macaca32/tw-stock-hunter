@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 DB_FILENAME = "hunter.db"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # ---------------------------------------------------------------------------
 #  Schema DDL
@@ -108,6 +108,32 @@ CREATE INDEX IF NOT EXISTS idx_portfolio_date
 
 CREATE INDEX IF NOT EXISTS idx_portfolio_stock
     ON portfolio_history (stock_id);
+
+
+-- ── Table: stage1_results ────────────────────────────────────────────────
+-- Phase 25: One row per candidate that passed stage1 screening.
+-- Populated after each pipeline run so stage2_deep can query via SQL
+-- instead of reading JSON files.
+CREATE TABLE IF NOT EXISTS stage1_results (
+    run_date   TEXT    NOT NULL,
+    stock_id   TEXT    NOT NULL,
+    stock_name TEXT    DEFAULT '',
+    close      REAL,
+    composite_score REAL,
+    revenue_score   REAL DEFAULT 25,
+    profitability_score REAL DEFAULT 25,
+    valuation_score REAL DEFAULT 25,
+    flow_score      REAL DEFAULT 25,
+    momentum_score  REAL DEFAULT 25,
+    passed      INTEGER DEFAULT 1,
+    PRIMARY KEY (run_date, stock_id)
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_stage1_run_date
+    ON stage1_results (run_date);
+
+CREATE INDEX IF NOT EXISTS idx_stage1_stock
+    ON stage1_results (stock_id);
 
 
 -- ── Table: _meta ─────────────────────────────────────────────────────────
@@ -1053,6 +1079,155 @@ def get_daily_history_batch(
 
 
 # ---------------------------------------------------------------------------
+#  Stage 1 Results — Phase 25: SQL-backed stage1↔stage2 data passing
+# ---------------------------------------------------------------------------
+
+def save_stage1_to_sqlite(stage1_output: dict, data_dir: Optional[str] = None) -> int:
+    """Save Stage 1 screening results into the stage1_results table.
+
+    Called by the pipeline after stage1_screen completes. Replaces any
+    existing rows for the same run_date (idempotent per run).
+
+    Args:
+        stage1_output:  The dict returned by run_stage1().
+        data_dir:       Data directory override.
+
+    Returns:
+        Number of candidate rows inserted.
+    """
+    run_date = stage1_output.get("date", "")
+    if not run_date:
+        logger.warning("save_stage1_to_sqlite: no date in stage1_output — skipping")
+        return 0
+
+    candidates = stage1_output.get("candidates", [])
+    if not candidates:
+        return 0
+
+    conn = get_connection(data_dir, readonly=False)
+    try:
+        # Delete previous rows for this run_date (idempotent replace)
+        conn.execute("DELETE FROM stage1_results WHERE run_date = ?", (run_date,))
+
+        rows = []
+        for c in candidates:
+            sb = c.get("score_breakdown", {})
+            rows.append((
+                run_date,
+                str(c.get("code", "")),
+                str(c.get("name", "")),
+                _safe_float(c.get("close"), 0),
+                _safe_float(c.get("composite_score"), 0),
+                _safe_float(sb.get("revenue", 25), 25),
+                _safe_float(sb.get("profitability", 25), 25),
+                _safe_float(sb.get("valuation", 25), 25),
+                _safe_float(sb.get("flow", 25), 25),
+                _safe_float(sb.get("momentum", 25), 25),
+                1 if c.get("pass", c.get("composite_score", 0) >= 65) else 0,
+            ))
+
+        conn.executemany(
+            """INSERT INTO stage1_results
+               (run_date, stock_id, stock_name, close, composite_score,
+                revenue_score, profitability_score, valuation_score,
+                flow_score, momentum_score, passed)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            rows,
+        )
+        conn.commit()
+        logger.info("stage1_results: saved %d candidates for %s", len(rows), run_date)
+        return len(rows)
+    except Exception as e:
+        logger.warning("save_stage1_to_sqlite failed: %s", e)
+        return 0
+    finally:
+        conn.close()
+
+
+def load_stage1_from_sqlite(
+    date_str: Optional[str] = None,
+    data_dir: Optional[str] = None,
+) -> Optional[dict]:
+    """Load Stage 1 results from SQLite instead of JSON file.
+
+    Returns the same dict shape as load_stage1_results() in stage2_deep.py
+    so stage2 can use it as a drop-in replacement. Returns None if no data.
+
+    Args:
+        date_str:   Run date (YYYY-MM-DD). If None, uses the most recent.
+        data_dir:   Data directory override.
+
+    Returns:
+        Dict with keys: stage, date, timestamp, candidates, watchlist,
+        rejected_count, summary — matching the JSON file format.
+    """
+    db_path = get_db_path(data_dir)
+    if not db_path.exists():
+        return None
+
+    conn = get_connection(data_dir, readonly=True)
+    try:
+        if date_str is None:
+            # Find most recent run_date
+            row = conn.execute(
+                "SELECT MAX(run_date) FROM stage1_results"
+            ).fetchone()
+            if not row or not row[0]:
+                return None
+            date_str = row[0]
+
+        cursor = conn.execute(
+            """SELECT stock_id, stock_name, close, composite_score,
+                      revenue_score, profitability_score, valuation_score,
+                      flow_score, momentum_score, passed
+               FROM stage1_results
+               WHERE run_date = ?
+               ORDER BY composite_score DESC""",
+            (date_str,),
+        )
+
+        candidates = []
+        for r in cursor:
+            candidates.append({
+                "code": r[0],
+                "name": r[1],
+                "close": r[2],
+                "composite_score": r[3],
+                "score_breakdown": {
+                    "revenue": r[4],
+                    "profitability": r[5],
+                    "valuation": r[6],
+                    "flow": r[7],
+                    "momentum": r[8],
+                },
+                "pass": bool(r[9]),
+            })
+
+        if not candidates:
+            return None
+
+        return {
+            "stage": 1,
+            "date": date_str,
+            "timestamp": datetime.now().isoformat(),
+            "candidates": candidates,
+            "watchlist": [],
+            "rejected_count": 0,
+            "summary": {
+                "total_screened": len(candidates),
+                "passed": len([c for c in candidates if c.get("pass")]),
+                "watchlist": 0,
+                "rejected": 0,
+            },
+        }
+    except Exception as e:
+        logger.debug("load_stage1_from_sqlite failed: %s", e)
+        return None
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
 #  Database info / diagnostics
 # ---------------------------------------------------------------------------
 
@@ -1086,7 +1261,7 @@ def db_info(data_dir: Optional[str] = None) -> dict:
         info["last_migration"] = row[0] if row else None
 
         # Row counts
-        for table in ["stocks_daily", "corporate_actions", "regime_snapshots", "portfolio_history"]:
+        for table in ["stocks_daily", "corporate_actions", "regime_snapshots", "portfolio_history", "stage1_results"]:
             row = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
             info[f"{table}_rows"] = row[0]
 
