@@ -565,4 +565,34 @@ Stage 2: 1 passed, 0 disqualified
 ### Pipeline Test
 **PASSED** ✅ 10/10 stages in 41.3s
 
+## Phase 37 — Machine Learning Signal Fusion Ensemble (2026-05-17)
+
+**Status:** ✅ COMPLETE  
+**Commits:** `e2e65eb`, `ebe865a`, `acc8491`, `aebcb5d` (4 commits)  
+**Code review:** ✅ Taiwan-market correct, backward compatible
+
+### What Changed
+- **core/signal_fusion.py** (~1272 lines): ML ensemble combining all Phase 26-36 scoring dimensions into unified probability of outperformance. Features: SignalNormalization (z-score space), compute_ensemble_score() → float [0,1], get_feature_importance() (SHAP-like permutation importance), calibrate_scores() (isotonic regression + Platt scaling), get_confidence_band(), extract_signals_from_pipeline(), run_signal_fusion()
+- **config/signal_fusion_weights.json** (~90 lines): Initial weights proportional to Phase 28 backtest Sharpe ratios; 13 dimensions summing to 1.0; interaction terms (momentum×volume, earnings×fundamental)
+- **run_pipeline.py**: Stage 11 signal_fusion added after report_generator
+- **tests/test_signal_fusion.py** (~925 lines): 79 tests, all passing, zero API calls
+
+### Review Notes
+- Traditional Chinese labels throughout ✓
+- All 13 dimensions extracted from pipeline outputs with neutral defaults ✓
+- Backward compatible — skips gracefully if any upstream dimension missing ✓
+- Sigmoid overflow handling: exponent clamped ±500, catch OverflowError → 0.5 ✓
+- Isotonic mapping bins have slightly overlapping boundaries (cosmetic, not a bug) 
+- Platt scaling gradient uses simplified form (converges slowly but works)
+- Taiwan-market aware with proper Traditional Chinese labels for all dimension descriptions ✓
+
+### Pipeline Test: PASSED ✅
+```
+11/11 stages successful in 37.2s
+Stage 1: 1 passed, 15 watchlist, 1343 rejected
+Stage 2: 1 passed, 0 disqualified
+Signal Fusion: 1 stocks scored, avg=0.667, high-conviction=1
+```
+
+### Dry Run Test: PASSED ✅ (all 79 signal_fusion tests)
 ---
