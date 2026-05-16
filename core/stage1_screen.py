@@ -1262,6 +1262,167 @@ def get_regime_adjusted_thresholds(regime, base_thresholds):
         }
 
 
+def detect_false_signals(scores, price_history=None, stock_code=None,
+                         datasets=None, dividends_index=None):
+    """Phase 27: Detect contradictory signals across dimensions.
+
+    Flags candidates that show contradictory signals which may indicate
+    false positives or require extra caution:
+    - High technical score but weak fundamentals → "contrarian" flag
+    - Strong momentum but declining volume → "fading_momentum" warning
+    - Recent corporate action (ex-dividend within 30 days) → adjust expectations
+    - Revenue momentum diverging from price momentum → "divergence" flag
+    - Low confidence dimensions scoring high → "unreliable_signal" flag
+
+    Args:
+        scores: Dict of dimension scores (revenue, profitability, valuation, flow, momentum)
+        price_history: Optional price history dict for volume analysis
+        stock_code: Stock code for data lookups
+        datasets: Optional datasets dict for corporate action checks
+        dividends_index: Optional index for dividend data lookups
+
+    Returns:
+        Dict with "flags" (list of warning dicts) and "is_contradictory" (bool).
+        Each flag has: type, severity, dimension, message.
+    """
+    flags = []
+
+    technical_score = scores.get("momentum", 50)
+    fundamental_avg = (scores.get("profitability", 50) + scores.get("valuation", 50)) / 2.0
+    momentum_score = technical_score
+    flow_score = scores.get("flow", 50)
+    revenue_score = scores.get("revenue", 50)
+
+    # --- 1. Contrarian flag: high technical but weak fundamentals ---
+    # If momentum is strong but fundamental measures are poor, the signal may be
+    # a speculative spike rather than a sustainable trend.
+    if technical_score >= 70 and fundamental_avg < 35:
+        flags.append({
+            "type": "contrarian",
+            "severity": "high",
+            "dimensions": ["momentum", "profitability", "valuation"],
+            "message": (f"High technical ({technical_score:.0f}) but weak fundamentals "
+                       f"(avg {fundamental_avg:.0f}) — likely speculative, not sustainable"),
+        })
+    elif technical_score >= 60 and fundamental_avg < 40:
+        flags.append({
+            "type": "contrarian",
+            "severity": "medium",
+            "dimensions": ["momentum", "profitability", "valuation"],
+            "message": (f"Technical ({technical_score:.0f}) outpacing fundamentals "
+                       f"(avg {fundamental_avg:.0f}) — watch for reversal"),
+        })
+
+    # --- 2. Fading momentum: strong momentum but declining volume ---
+    # Price going up but volume declining = distribution / weakening trend.
+    if momentum_score >= 60 and price_history and stock_code and stock_code in price_history:
+        history = price_history[stock_code]
+        if len(history) >= 10:
+            try:
+                recent_volumes = [h.get("adj_volume") or h.get("volume") or 0 for h in history[-5:]]
+                older_volumes = [h.get("adj_volume") or h.get("volume") or 0 for h in history[-10:-5]]
+                recent_avg = sum(recent_volumes) / len(recent_volumes) if recent_volumes else 0
+                older_avg = sum(older_volumes) / len(older_volumes) if older_volumes else 1
+
+                if older_avg > 0 and recent_avg > 0:
+                    vol_ratio = recent_avg / older_avg
+                    if vol_ratio < 0.6:  # Volume dropped > 40%
+                        flags.append({
+                            "type": "fading_momentum",
+                            "severity": "high",
+                            "dimensions": ["momentum", "flow"],
+                            "message": (f"Strong momentum ({momentum_score:.0f}) but volume declining "
+                                       f"(ratio={vol_ratio:.2f}) — distribution suspected"),
+                        })
+                    elif vol_ratio < 0.8:
+                        flags.append({
+                            "type": "fading_momentum",
+                            "severity": "medium",
+                            "dimensions": ["momentum", "flow"],
+                            "message": (f"Momentum ({momentum_score:.0f}) with softening volume "
+                                       f"(ratio={vol_ratio:.2f}) — trend may weaken"),
+                        })
+            except (ValueError, TypeError, ZeroDivisionError):
+                pass
+
+    # --- 3. Strong momentum but weak flow → institutional not confirming ---
+    if momentum_score >= 65 and flow_score < 30:
+        flags.append({
+            "type": "unconfirmed_momentum",
+            "severity": "medium",
+            "dimensions": ["momentum", "flow"],
+            "message": (f"Strong momentum ({momentum_score:.0f}) but weak institutional flow "
+                       f"({flow_score:.0f}) — retail-driven, less reliable"),
+        })
+
+    # --- 4. Revenue-price divergence ---
+    # Revenue declining but price momentum strong → fundamental disconnect.
+    if revenue_score < 30 and momentum_score >= 60:
+        flags.append({
+            "type": "revenue_price_divergence",
+            "severity": "high",
+            "dimensions": ["revenue", "momentum"],
+            "message": (f"Declining revenue ({revenue_score:.0f}) but strong price momentum "
+                       f"({momentum_score:.0f}) — earnings may not support price"),
+        })
+    elif revenue_score >= 70 and momentum_score < 30:
+        flags.append({
+            "type": "revenue_price_divergence",
+            "severity": "medium",
+            "dimensions": ["revenue", "momentum"],
+            "message": (f"Strong revenue ({revenue_score:.0f}) but weak price momentum "
+                       f"({momentum_score:.0f}) — market not yet recognizing value"),
+        })
+
+    # --- 5. Recent corporate action (ex-dividend within 30 days) ---
+    # Ex-dividend causes an artificial price gap that distorts momentum scores.
+    if stock_code and datasets:
+        # Check dividends data for recent ex-dividend dates
+        div_data = datasets.get("dividends", [])
+        if div_data:
+            div_records = []
+            if dividends_index is not None:
+                div_records = dividends_index.get(stock_code, [])
+            else:
+                for d in div_data:
+                    if isinstance(d, dict) and get_field(d, "公司代號", "Code", "") == stock_code:
+                        div_records.append(d)
+
+            for d in div_records[:5]:  # Check last 5 records
+                try:
+                    # Try to find date field
+                    date_str = d.get("日期") or d.get("date") or d.get("ex_dividend_date") or ""
+                    cash_div = safe_float(d.get("股東配發-盈餘分配之現金股利(元/股)") or
+                                         d.get("cash_div") or "0", 0)
+                    if date_str and cash_div > 0:
+                        # Parse date
+                        parsed_date = parse_twse_date(str(date_str))
+                        if parsed_date:
+                            days_since = (datetime.now() - parsed_date).days
+                            if 0 <= days_since <= 30:
+                                flags.append({
+                                    "type": "recent_ex_dividend",
+                                    "severity": "medium",
+                                    "dimensions": ["momentum"],
+                                    "message": (f"Ex-dividend {days_since}d ago (NT${cash_div:.1f}/share) — "
+                                               f"price gap may distort momentum score"),
+                                })
+                                break  # Only flag once
+                except (ValueError, TypeError):
+                    pass
+
+    # --- Determine overall contradictory status ---
+    high_severity_count = sum(1 for f in flags if f.get("severity") == "high")
+    is_contradictory = high_severity_count >= 1 or len(flags) >= 3
+
+    return {
+        "flags": flags,
+        "is_contradictory": is_contradictory,
+        "flag_count": len(flags),
+        "high_severity_count": high_severity_count,
+    }
+
+
 def _validate_candidates(candidates, verbose=True):
     """Phase 9: Validate Stage 1 candidates via Pydantic schema.
     
@@ -1392,6 +1553,8 @@ def run_stage1(date_str=None, verbose=False):
     halts_index = _index_by_stock_code(datasets.get("halts", []), code_keys=("證券代號", "Code"))
     margin_susp_index = _index_by_stock_code(datasets.get("margin_susp", []), code_keys=("證券代號", "Code"))
     daily_index = _index_single(daily_data, code_keys=("證券代號", "Code"))
+    # Phase 27: dividends index for false signal detection (ex-dividend checks)
+    dividends_index = _index_by_stock_code(datasets.get("dividends", []), code_keys=("公司代號", "Code"))
     logger.info(
         "Phase 22: Built index dicts (pe=%d, revenue=%d, flow=%d, margin=%d)",
         len(pe_index), len(revenue_index), len(flow_index), len(margin_index),
@@ -1465,6 +1628,12 @@ def run_stage1(date_str=None, verbose=False):
             daily_index=daily_index, revenue_index=revenue_index,
         )
 
+        # Phase 27: Detect false/contradictory signals
+        false_signals = detect_false_signals(
+            scores, price_history=price_history, stock_code=code,
+            datasets=datasets, dividends_index=dividends_index,
+        )
+
         result = {
             "code": code,
             "name": name,
@@ -1473,6 +1642,7 @@ def run_stage1(date_str=None, verbose=False):
             "score_breakdown": scores,
             "signal_strength": signal_strength,
             "signal_confidence": signal_confidence,
+            "false_signals": false_signals,
             "pass": composite >= effective_pass
         }
         
