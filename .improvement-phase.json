@@ -1,7 +1,7 @@
 {
-  "current_phase": 35,
-  "phase_name": "Earnings season engine — integrate quarterly earnings reports (季報), YoY/QoQ comparisons, revenue/profit growth rates, estimate surprises into Stage 2 scoring. New core/earnings_analysis.py module.",
-  "started_at": null,
+  "current_phase": 36,
+  "phase_name": "Risk management overlay — implement stop-loss tiers (ATR-based hard stops, trailing stops for winners), position sizing constraints per conviction grade from signal quality scoring, and portfolio-level VaR estimation. New core/risk_manager.py module.",
+  "started_at": "2026-05-17T02:24:00+08:00",
   "completed_phases": [
     {
       "phase": 0,
@@ -265,10 +265,18 @@
       "completed_at": "2026-05-16T22:47:00+08:00",
       "summary": "Created core/market_context.py (575 lines) with fetch_cross_assets() pulling TAIEX futures (^TWII), USD/TWD, HSI, KWEB, VIX via yfinance with 6h TTL cache; compute_market_breadth() for advance/decline ratio and cross-asset correlation matrix; get_cross_asset_signal() returning -0.2 to +0.2 adjustment based on VIX risk sentiment, USD/TWD trend, HSI divergence. Integrated into regime_detector.py as optional 6th input (cross-asset override shifts regime one tier when signal >±0.15, BLACK_SWAN protected). Integrated into stage2_deep.py scaling signal to ±3 points in combined_score. All backward compatible with neutral defaults on fetch failure. Pipeline: 10/10 stages passed in 41.0s.",
       "commit": "c9c999c, 29dda61, 6263a41"
+    },
+    {
+      "phase": 35,
+      "name": "Earnings season engine — quarterly earnings reports (季報) integration with YoY/QoQ growth, estimate surprises into Stage 2 scoring",
+      "started_at": "2026-05-17T02:02:04.656853+08:00",
+      "completed_at": "2026-05-17T02:24:00+08:00",
+      "summary": "Created core/earnings_analysis.py (810 lines) with fetch_earnings_data(), compute_yoy_growth(), compute_qoq_growth(), check_estimate_surprise(), get_earnings_signal(). Added data/analyst_consensus.json template. Integrated into stage2_deep.py as check_earnings_quality() with weight 0.12 (weights.json v6.0). Red flag: earnings score < 20 disqualifies from Stage 2 pass. Backward compatible — all functions return None/neutral when data unavailable. Taiwan-market aware with Traditional Chinese labels and TWSE quarterly financials endpoint. Pipeline: 10/10 stages passed in 39.1s.",
+      "commit": "fa52894, bb2b013, 0559b88, ddefc17"
     }
   ],
-  "notes": "Phase 34 complete. Cross-asset correlation engine (market_context.py) integrated into regime detection and Stage 2 scoring.",
-  "rounds_completed": 13,
+  "notes": "Phase 35 complete. Earnings season engine (earnings_analysis.py) integrated into Stage 2 scoring with YoY/QoQ growth metrics and analyst estimate surprise checks.",
+  "rounds_completed": 14,
   "last_zai_round": {
     "round": 6,
     "date": "2026-05-11",

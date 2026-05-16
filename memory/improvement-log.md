@@ -511,3 +511,35 @@ Taiwan market conventions verified: TWSE codes (2330, 2454), Traditional Chinese
 Stage 1: 1 passed, 15 watchlist, 1343 rejected
 Stage 2: 1 passed, 0 disqualified
 ```
+
+## Phase 35 Complete (2026-05-17) — Earnings Season Engine
+**Commits:** `fa52894, bb2b013, 0559b88, ddefc17` (4 commits)
+
+### New Files:
+- **`core/earnings_analysis.py`** (~810 lines) — quarterly earnings analysis engine with YoY/QoQ growth, estimate surprise checks
+- **`data/analyst_consensus.json`** (42 lines) — template for analyst EPS consensus data
+
+### Features Implemented:
+1. **fetch_earnings_data(stock_id, quarter)** — pulls quarterly financials from dividends data + TWSE API sources; extracts revenue, net profit, EPS; caches in data/earnings_cache.json with 24h TTL
+2. **compute_yoy_growth(stock_id)** → dict with revenue_yoy_pct, profit_yoy_pct, eps_yoy_pct (current quarter vs same quarter last year)
+3. **compute_qoq_growth(stock_id)** → dict with revenue_qoq_pct, profit_qoq_pct, eps_qoq_pct (current vs prior quarter)
+4. **check_estimate_surprise(stock_id)** — compares reported EPS vs analyst consensus from data/analyst_consensus.json; returns surprise_pct and grade (beat/in-line/miss)
+5. **get_earnings_signal(stock_id, date_str)** → -0.15 to +0.15 score adjustment based on growth momentum acceleration/deceleration, consecutive beat streaks, seasonal patterns
+6. **Integration into stage2_deep.py** — `check_earnings_quality()` as new Stage 2 scoring dimension (weight: earnings_growth=0.12 in weights.json v6.0)
+7. **Backward compatible** — all functions return None/neutral when data unavailable; no hard dependencies on analyst consensus or quarterly data
+8. **Taiwan-market aware** — Traditional Chinese labels, TWSE quarterly financials endpoint (綜合損益), fiscal quarters Q1-Q4 aligned with ROC reporting calendar
+9. **Red flag** — severely declining earnings (score < 20) disqualifies from Stage 2 pass
+
+### Implementation Review ✅
+- **Cache:** 24h TTL with graceful expiry, JSON format with timestamp tracking per stock-quarter
+- **Fallbacks:** Every data fetch wrapped in try/except; neutral defaults (None revenue/profit/EPS) prevent pipeline breaks
+- **Stage 2 scoring:** Earnings signal mapped to 0-100 score range, weighted at 0.12 alongside dividends/fundamentals/revenue/shareholders/pledge/penalties/news_sentiment
+- **Red flags:** Score < 20 triggers disqualification (severely declining earnings)
+- **Diagnostics:** Error counts and score distributions tracked per run for monitoring
+
+### Pipeline Test: PASSED ✅
+```
+10/10 stages successful in 39.1s
+Stage 1: 1 passed, 15 watchlist, 1343 rejected
+Stage 2: 1 passed, 0 disqualified
+```
