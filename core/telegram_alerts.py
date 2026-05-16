@@ -12,6 +12,7 @@ Features:
 - Phase 29: Alert Deduplication - suppress duplicates within configurable cooldown
 - Phase 29: Escalation Rules - severity levels (info/warning/critical) with routing
 - Phase 29: Daily Digest Mode - batch info alerts into morning/evening digests
+- Phase 29: Smart Alert Formatting - Taiwan market conventions, Traditional Chinese
 """
 
 import hashlib
@@ -44,6 +45,24 @@ SEVERITY_MAP = {
 
 SEVERITY_LEVEL = {"info": 1, "warning": 2, "critical": 3}
 
+# -- Phase 29: Regime name translations (Traditional Chinese) --
+REGIME_TC = {
+    "normal": "\u5e38\u614b",       # 常態
+    "caution": "\u8b66\u6212",      # 警戒
+    "stress": "\u58d3\u529b",       # 壓力
+    "crisis": "\u5371\u6a5f",       # 危機
+    "black_swan": "\u9ed1\u5929\u9d5d",  # 黑天鵝
+    "unknown": "\u672a\u77e5",      # 未知
+}
+
+# -- Phase 29: Sector indicators for stock codes --
+# TWSE stocks: 1xxx-8xxx (TWSE 上市)
+# TPEx stocks: 6xxx-9xxx (櫃買 上櫃)
+SECTOR_INDICATORS = {
+    "twse": "\u4e0a\u5e02",  # 上市
+    "tpex": "\u4e0a\u6ac3",  # 上櫃
+}
+
 
 class TelegramAlerts:
     def __init__(self, data_dir=None, dedup_cooldown_hours: float = 4.0):
@@ -70,6 +89,9 @@ class TelegramAlerts:
             self.holiday_calendar = HolidayCalendar(str(self.data_dir))
         except ImportError:
             pass
+
+        # Phase 29: Lazy-loaded sector mapping
+        self._sector_map = None
 
     def send_message(self, message: str) -> bool:
         """Send a message via Telegram Bot API.
@@ -353,7 +375,9 @@ class TelegramAlerts:
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         header = "\U0001f534\U0001f534 CRITICAL ALERT"
         if stock_code:
-            header += f" - {stock_code}"
+            # Phase 29: Use smart stock code formatting
+            formatted_code = self._format_stock_code(stock_code)
+            header += f" - {formatted_code}"
         header += f" [{alert_type}]"
 
         return (
@@ -455,7 +479,8 @@ class TelegramAlerts:
             for entry in entries:
                 ts = entry.get("timestamp", "")[:16]  # Trim seconds
                 code = entry.get("stock_code", "")
-                code_label = f" [{code}]" if code else ""
+                # Phase 29: Smart stock code formatting in digest
+                code_label = f" [{self._format_stock_code(code)}]" if code else ""
                 # Show first 80 chars of message to keep digest readable
                 msg_preview = entry.get("message", "")[:80]
                 if len(entry.get("message", "")) > 80:
@@ -510,11 +535,99 @@ class TelegramAlerts:
         return self.flush_digest(digest_type)
 
     # ================================================================== #
-    #  Formatting methods (unchanged - backward compatible)
+    #  Phase 29: Smart Alert Formatting - Taiwan Market Conventions
+    # ================================================================== #
+
+    def _get_sector_map(self) -> Dict[str, str]:
+        """Lazy-load the sector mapping from sectors module."""
+        if self._sector_map is None:
+            try:
+                from sectors import load_sector_mapping
+                self._sector_map = load_sector_mapping(str(self.data_dir))
+            except ImportError:
+                self._sector_map = {}
+        return self._sector_map
+
+    def _format_stock_code(self, code: str) -> str:
+        """Format a stock code with sector indicator.
+
+        Taiwan market convention: show the listing board alongside the code.
+        TWSE (上市) stocks: 1xxx-5xxx, 8xxx
+        TPEx (上櫃) stocks: 6xxx-9xxx
+
+        Example: 2330 -> 2330(上市)  or  6170 -> 6170(上櫃)
+        """
+        if not code or not code.isdigit():
+            return code
+
+        try:
+            code_int = int(code)
+        except ValueError:
+            return code
+
+        # TPEx range: 6000-7999 and >= 9900
+        if (6000 <= code_int <= 7999) or code_int >= 9900:
+            board = SECTOR_INDICATORS["tpex"]
+        else:
+            board = SECTOR_INDICATORS["twse"]
+
+        # Add sector tag from sectors module
+        sector_map = self._get_sector_map()
+        sector = sector_map.get(code, "")
+
+        if sector:
+            return f"{code}({board}) [{sector}]"
+        return f"{code}({board})"
+
+    def _format_price_change(self, current_price: float,
+                             previous_price: float = 0.0,
+                             change_pct: float = 0.0) -> str:
+        """Format a price change using Taiwan market conventions.
+
+        Shows NT$ amount as primary indicator, percentage as secondary.
+        This matches how Taiwanese investors discuss price movements:
+        "漲了3.5元" (up NT$3.5) rather than just "+1.2%".
+
+        Args:
+            current_price: Current price in NT$
+            previous_price: Previous close price in NT$ (0 if unavailable)
+            change_pct: Percentage change (used if previous_price unavailable)
+
+        Returns:
+            Formatted string like "NT$985.0 (+3.5 / +0.36%)" or
+            "NT$985.0 (+0.36%)"
+        """
+        if previous_price > 0:
+            change_ntd = current_price - previous_price
+            if change_pct == 0.0 and previous_price > 0:
+                change_pct = (change_ntd / previous_price) * 100
+
+            sign = "+" if change_ntd >= 0 else ""
+            return f"NT${current_price:.1f} ({sign}{change_ntd:.1f} / {sign}{change_pct:.2f}%)"
+        else:
+            sign = "+" if change_pct >= 0 else ""
+            return f"NT${current_price:.1f} ({sign}{change_pct:.2f}%)"
+
+    def _format_regime_tc(self, regime: str) -> str:
+        """Format regime name in Traditional Chinese for Telegram display.
+
+        Maps English regime names to Traditional Chinese equivalents
+        commonly used in Taiwanese financial media:
+          normal -> 常態, caution -> 警戒, stress -> 壓力,
+          crisis -> 危機, black_swan -> 黑天鵝
+        """
+        return REGIME_TC.get(regime, regime)
+
+    # ================================================================== #
+    #  Formatting methods - enhanced with Phase 29 smart formatting
     # ================================================================== #
 
     def format_top_candidates(self, candidates, limit=5):
-        """Format top candidates for Telegram (no markdown tables)"""
+        """Format top candidates for Telegram (no markdown tables)
+
+        Phase 29: Now includes sector indicator on stock codes and
+        NT$ price formatting when close price is available.
+        """
         lines = []
 
         for i, c in enumerate(candidates[:limit], 1):
@@ -524,8 +637,23 @@ class TelegramAlerts:
             s1 = c.get("stage1_score", "")
             s2 = c.get("stage2_score", "")
 
-            lines.append(f"{i}. {code} {name}")
+            # Phase 29: Smart stock code formatting with board indicator
+            formatted_code = self._format_stock_code(code)
+
+            lines.append(f"{i}. {formatted_code} {name}")
             lines.append(f"   Score: {combined} (S1:{s1} S2:{s2})")
+
+            # Phase 29: Show price in NT$ when available
+            close = c.get("close") or c.get("adj_close")
+            if close and float(close) > 0:
+                prev_close = float(c.get("prev_close", 0))
+                change_pct = float(c.get("change_pct", 0))
+                if prev_close > 0 or change_pct != 0:
+                    price_str = self._format_price_change(
+                        float(close), prev_close, change_pct)
+                else:
+                    price_str = f"NT${float(close):.1f}"
+                lines.append(f"   {price_str}")
 
             # Add checks if available
             checks = c.get("checks", {})
@@ -540,7 +668,10 @@ class TelegramAlerts:
         return "\n".join(lines)
 
     def format_regime(self, regime_data):
-        """Format regime info for Telegram"""
+        """Format regime info for Telegram
+
+        Phase 29: Uses Traditional Chinese regime names for display.
+        """
         regime = regime_data.get("regime", "unknown")
         trend = regime_data.get("trend", "unknown")
         volatility = regime_data.get("volatility", 0)
@@ -554,7 +685,11 @@ class TelegramAlerts:
             "unknown": "❓"
         }
 
-        return f"{emoji.get(regime, '❓')} Regime: {regime}\n   Trend: {trend} | Volatility: {volatility:.4f}"
+        # Phase 29: Traditional Chinese regime name
+        regime_tc = self._format_regime_tc(regime)
+
+        return (f"{emoji.get(regime, '❓')} 市場狀態: {regime_tc} ({regime})\n"
+                f"   趨勢: {trend} | 波動率: {volatility:.4f}")
 
     def format_daily_summary(self, report):
         """Format daily summary for Telegram"""
@@ -614,7 +749,11 @@ class TelegramAlerts:
         return None
 
     def generate_alert(self, date_str=None):
-        """Generate alert message"""
+        """Generate alert message
+
+        Phase 29: Regime change notifications now use Traditional Chinese
+        names for better readability on Telegram.
+        """
         if date_str is None:
             date_str = datetime.now().strftime("%Y-%m-%d")
 
@@ -632,7 +771,14 @@ class TelegramAlerts:
         message = self.format_daily_summary(report)
 
         if regime_change:
-            message = f"⚠️ Regime Change: {regime_change['old']} → {regime_change['new']}\n\n" + message
+            # Phase 29: Use Traditional Chinese for regime names
+            old_tc = self._format_regime_tc(regime_change['old'])
+            new_tc = self._format_regime_tc(regime_change['new'])
+            message = (
+                f"⚠️ 市場狀態變更: {old_tc} → {new_tc}\n"
+                f"   ({regime_change['old']} → {regime_change['new']})\n\n"
+                + message
+            )
 
         return message
 
