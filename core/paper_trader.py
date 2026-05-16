@@ -893,6 +893,93 @@ days would inflate holding period and trigger premature max_holding_days exits.
 
         return results
 
+    # ------------------------------------------------------------------ #
+    #  Phase 26: Sector-adjusted returns
+    # ------------------------------------------------------------------ #
+
+    def compute_sector_adjusted_returns(self, results=None):
+        """Compute sector-adjusted returns (alpha) for each trade and portfolio.
+
+        Phase 26: Compares each stock's return against its sector benchmark
+        (equal-weight average of all trades in the same sector within the same
+        backtest period). Reports alpha = stock_return - sector_return for each
+        holding, and a portfolio-level sector-adjusted Sharpe ratio.
+
+        The sector benchmark is computed as the simple average P&L% of all
+        closed trades in the same sector. This serves as a proxy for the
+        TWSE sub-sector index return — using actual index data would be more
+        accurate but requires data that is not currently available in the
+        pipeline.
+
+        Args:
+            results: Output from run_backtest(). If None, runs a fresh backtest
+                     with default lookback_days=60.
+
+        Returns:
+            The same results dict with additional fields:
+            - Each trade gets "sector_alpha" and "sector_benchmark_return"
+            - results gets "sector_adjusted" dict with portfolio-level metrics
+        """
+        if results is None:
+            results = self.run_backtest()
+
+        if results.get("total_trades", 0) == 0:
+            results["sector_adjusted"] = {
+                "sector_benchmarks": {},
+                "portfolio_alpha": 0,
+                "sector_adjusted_sharpe": 0,
+                "note": "No trades to analyze",
+            }
+            return results
+
+        # Build sector benchmark: equal-weight average P&L per sector
+        sector_pnls = {}  # sector -> [pnl_pct, ...]
+        for trade in results.get("trades", []):
+            sector = trade.get("sector", "other")
+            pnl = trade.get("pnl_pct", 0)
+            if pnl is not None:
+                sector_pnls.setdefault(sector, []).append(pnl)
+
+        sector_benchmarks = {}
+        for sector, pnls in sector_pnls.items():
+            sector_benchmarks[sector] = round(sum(pnls) / len(pnls), 2)
+
+        # Compute alpha per trade
+        alphas = []
+        for trade in results.get("trades", []):
+            sector = trade.get("sector", "other")
+            benchmark = sector_benchmarks.get(sector, 0)
+            pnl = trade.get("pnl_pct") or 0
+            alpha = round(pnl - benchmark, 2)
+            trade["sector_alpha"] = alpha
+            trade["sector_benchmark_return"] = benchmark
+            alphas.append(alpha)
+
+        # Portfolio-level alpha (average of all trade alphas)
+        portfolio_alpha = round(sum(alphas) / len(alphas), 2) if alphas else 0
+
+        # Sector-adjusted Sharpe ratio: mean(alpha) / std(alpha)
+        # Annualized assuming ~252 trading days, ~5 trades per rebalance cycle
+        # (conservative annualization factor: sqrt(50) for ~50 round-trips/year)
+        if len(alphas) >= 2:
+            mean_alpha = sum(alphas) / len(alphas)
+            std_alpha = math.sqrt(sum((a - mean_alpha) ** 2 for a in alphas) / len(alphas))
+            if std_alpha > 0:
+                sharpe = (mean_alpha / std_alpha) * math.sqrt(50)
+                sector_adjusted_sharpe = round(sharpe, 2)
+            else:
+                sector_adjusted_sharpe = 0
+        else:
+            sector_adjusted_sharpe = 0
+
+        results["sector_adjusted"] = {
+            "sector_benchmarks": sector_benchmarks,
+            "portfolio_alpha": portfolio_alpha,
+            "sector_adjusted_sharpe": sector_adjusted_sharpe,
+        }
+
+        return results
+
     def save_trades(self):
         """Save trades to file"""
         trades_file = self.data_dir / "paper_trades.json"
@@ -936,6 +1023,8 @@ def main():
     parser.add_argument("--backtest", type=int, default=0, help="Run backtest for N days")
     parser.add_argument("--multi-period", dest="multi_period", type=int, default=0,
                         help="Run multi-period validation with N periods")
+    parser.add_argument("--sector-adjusted", dest="sector_adjusted", action="store_true",
+                        help="Include sector-adjusted returns analysis")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
     args = parser.parse_args()
 
@@ -969,12 +1058,24 @@ def main():
         # Run backtest
         results = trader.run_backtest(lookback_days=args.backtest)
 
+        # Phase 26: Optional sector-adjusted enhancement
+        if args.sector_adjusted:
+            results = trader.compute_sector_adjusted_returns(results)
+
         if args.verbose:
             print("Backtest Results:")
             print(f"   Total trades: {results['total_trades']}")
             print(f"   Win rate: {results.get('win_rate', 0)}%")
             print(f"   Avg P&L: {results['avg_pnl_pct']}%")
             print(f"   Total P&L: {results['total_pnl_pct']}%")
+
+            if "sector_adjusted" in results:
+                sa = results["sector_adjusted"]
+                print(f"\n   Sector-Adjusted Metrics:")
+                print(f"     Portfolio alpha: {sa.get('portfolio_alpha', 0)}%")
+                print(f"     Sector-adj Sharpe: {sa.get('sector_adjusted_sharpe', 0)}")
+                for sector, bench in sa.get("sector_benchmarks", {}).items():
+                    print(f"     {sector} benchmark: {bench}%")
     else:
         # Simulate today
         candidates = trader.load_candidates(args.date)
