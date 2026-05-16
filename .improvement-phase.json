@@ -1,6 +1,6 @@
 {
-  "current_phase": 38,
-  "phase_name": "Portfolio optimization engine — mean-variance / Black-Litterman framework with Taiwan market constraints (sector caps, stock limits, liquidity filters). Integration into pipeline as Stage 12 after signal_fusion. Produces optimized portfolio weights respecting all Phase 6 weight smoothing and Phase 36 risk constraints.",
+  "current_phase": 39,
+  "phase_name": "Next phase TBD",
   "started_at": null,
   "completed_phases": [
     {
@@ -289,9 +289,17 @@
       "completed_at": "2026-05-17T04:30:00+08:00",
       "summary": "Created core/signal_fusion.py (1272 lines) with SignalNormalization class, compute_ensemble_score() → float [0,1], get_feature_importance() (SHAP-like permutation importance), calibrate_scores() (isotonic regression + Platt scaling), get_confidence_band(). Added config/signal_fusion_weights.json (13 dimensions summing to 1.0 + interaction terms). Integrated as Stage 11 in run_pipeline.py after report_generator. Produces data/ensemble_YYYY-MM-DD.json with per-stock ensemble scores, rankings, and feature importance. All backward compatible with neutral defaults. Taiwan-market aware with Traditional Chinese labels. Pipeline: 11/11 stages passed in 37.2s.",
       "commit": "e2e65eb, ebe865a, acc8491, aebcb5d"
+    },
+    {
+      "phase": 38,
+      "name": "Portfolio Optimization Engine — mean-variance / Black-Litterman with Taiwan market constraints",
+      "started_at": "2026-05-17T05:00:00+08:00",
+      "completed_at": "2026-05-17T05:30:00+08:00",
+      "summary": "Created core/portfolio_optimizer.py (1333 lines) with 7 public functions: load_ensemble_results() reads Phase 37 output, compute_covariance_matrix() builds empirical covariance with holiday forward-fill, optimize_mean_variance() solves Markowitz with Taiwan constraints (stock ≤8%, sector ≤25%, min 1% position, long-only), optimize_black_litterman() implements BL framework with ensemble-derived views, apply_weight_smoothing() integrates Phase 6 max 5% daily change, validate_constraints() checks Phases 5/36 constraints, run_portfolio_optimizer() is the Stage 12 pipeline entry point. Uses scipy.optimize when available, falls back to iterative heuristic optimizer. Produces data/optimized_portfolio_YYYY-MM-DD.json with stock_weights, sector_allocation, annualized return/volatility/Sharpe, constraint_violations, smoothing_applied. Integrated as Stage 12 in run_pipeline.py after signal_fusion. 73 comprehensive tests, all passing. All Traditional Chinese labels, backward compatible with graceful skips.",
+      "commit": "79587cb, 34c4817, 0eb32ef"
     }
   ],
-  "notes": "Phase 37 complete. Signal fusion ensemble integrated with pipeline Stage 11.",
+  "notes": "Phase 38 complete. Portfolio optimization engine integrated with pipeline Stage 12.",
   "rounds_completed": 14,
   "last_zai_round": {
     "round": 6,
