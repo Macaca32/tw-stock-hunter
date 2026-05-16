@@ -811,6 +811,14 @@ def run_stage2(date_str=None, verbose=False):
             logger.debug("Phase 31: news_sentiment import/call failed for %s: %r", code, e)
             news_result = None
         
+        # Phase 35: Earnings quality analysis (graceful fallback on failure)
+        try:
+            from earnings_analysis import check_earnings_quality
+            earnings_result = check_earnings_quality(code, date_str=date)
+        except Exception as e:
+            logger.debug("Phase 35: earnings_analysis import/call failed for %s: %r", code, e)
+            earnings_result = None
+        
         # Phase 30: Market microstructure analysis
         current_price = safe_float(candidate.get("close", 0), 0)
         vol_profile = compute_volume_profile(price_history, code, current_price=current_price)
@@ -844,6 +852,7 @@ def run_stage2(date_str=None, verbose=False):
         pledge_score, pledge_status = (pledge_result if pledge_result is not None else (None, "error"))
         penalty_score, penalty_status = (penalty_result if penalty_result is not None else (None, "error"))
         news_score, news_status = (news_result if news_result is not None else (None, "error"))
+        earnings_score, earnings_status = (earnings_result if earnings_result is not None else (None, "error"))
         
         # Phase 12: Collect diagnostics
         if div_status == "error":
@@ -871,6 +880,11 @@ def run_stage2(date_str=None, verbose=False):
             diagnostics["check_errors"]["news_sentiment"] = diagnostics["check_errors"].get("news_sentiment", 0) + 1
         elif news_score is not None:
             diagnostics["score_distributions"].setdefault("news_sentiment", []).append(news_score)
+        # Phase 35: Earnings quality diagnostics
+        if earnings_status == "error":
+            diagnostics["check_errors"]["earnings_growth"] = diagnostics["check_errors"].get("earnings_growth", 0) + 1
+        elif earnings_score is not None:
+            diagnostics["score_distributions"].setdefault("earnings_growth", []).append(earnings_score)
         
         # === RED FLAG DISQUALIFICATION ===
         # FIX v2: Actually enforce red flags
@@ -892,6 +906,10 @@ def run_stage2(date_str=None, verbose=False):
             # Phase 31: Strongly negative news sentiment = disqualify
             if news_score is not None and news_score < 35:
                 red_flags.append(f"Very negative news sentiment (score={news_score}, status={news_status})")
+            
+            # Phase 35: Severely declining earnings = disqualify
+            if earnings_score is not None and earnings_score < 20:
+                red_flags.append(f"Severely declining earnings (score={earnings_score}, status={earnings_status})")
         
         if red_flags:
             result = {
@@ -906,7 +924,8 @@ def run_stage2(date_str=None, verbose=False):
                     "shareholders": {"score": sh_score, "status": sh_status},
                     "pledge": {"score": pledge_score, "status": pledge_status},
                     "penalties": {"score": penalty_score, "status": penalty_status},
-                    "news_sentiment": {"score": news_score, "status": news_status}
+                    "news_sentiment": {"score": news_score, "status": news_status},
+                    "earnings_growth": {"score": earnings_score, "status": earnings_status}
                 },
                 "microstructure": {
                     "volume_profile": vol_profile,
@@ -927,6 +946,7 @@ def run_stage2(date_str=None, verbose=False):
         w_plg = stage2_weights.get("pledge", 0.18)
         w_pen = stage2_weights.get("penalties", 0.18)
         w_news = stage2_weights.get("news_sentiment", 0.11)  # Phase 31
+        w_earn = stage2_weights.get("earnings_growth", 0.12)  # Phase 35
         _safe = lambda s: s if s is not None else 50.0
         fundamental_score = (
             _safe(div_score) * w_div +
@@ -934,7 +954,8 @@ def run_stage2(date_str=None, verbose=False):
             _safe(sh_score) * w_sh +
             _safe(pledge_score) * w_plg +
             _safe(penalty_score) * w_pen +
-            _safe(news_score) * w_news  # Phase 31
+            _safe(news_score) * w_news +  # Phase 31
+            _safe(earnings_score) * w_earn  # Phase 35
         )
         
         result = {
@@ -948,15 +969,35 @@ def run_stage2(date_str=None, verbose=False):
                 "shareholders": {"score": sh_score, "status": sh_status},
                 "pledge": {"score": pledge_score, "status": pledge_status},
                 "penalties": {"score": penalty_score, "status": penalty_status},
-                "news_sentiment": {"score": news_score, "status": news_status}  # Phase 31
+                "news_sentiment": {"score": news_score, "status": news_status},  # Phase 31
+                "earnings_growth": {"score": earnings_score, "status": earnings_status}  # Phase 35
             },
             "microstructure": {
                 "volume_profile": vol_profile,
                 "intraday_pattern": intraday_pattern,
             },
             "cross_asset_adjustment": cross_asset_adjustment,  # Phase 34
-            "combined_score": round((stage1_score * 0.6 + fundamental_score * 0.4) + cross_asset_adjustment, 1)
         }
+
+        # Phase 35: Add earnings signal as composite score adjustment
+        try:
+            from earnings_analysis import get_earnings_signal as _get_earnings_signal
+            earnings_signal = _get_earnings_signal(code, date_str=date)
+            # Scale signal from [-0.15, +0.15] to [-2.25, +2.25] points
+            earnings_adj = round(earnings_signal * 15.0, 1)
+            earnings_adj = max(-2.25, min(2.25, earnings_adj))
+        except Exception:
+            earnings_signal = 0.0
+            earnings_adj = 0.0
+
+        result["earnings_signal"] = {
+            "signal": earnings_signal,
+            "adjustment_points": earnings_adj,
+        }
+        result["combined_score"] = round(
+            (stage1_score * 0.6 + fundamental_score * 0.4) +
+            cross_asset_adjustment + earnings_adj, 1
+        )
         
         if fundamental_score >= effective_s2_min:
             deep_results.append(result)
