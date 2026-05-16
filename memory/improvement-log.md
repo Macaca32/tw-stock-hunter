@@ -133,3 +133,39 @@ All fixes approved. Key Taiwan-market correctness verified:
 - **Milestone:** Full pipeline runs end-to-end for first time! ✅
 
 ### Dry Run Test: PASSED ✅ (all 80 tests)
+
+## Phase 26 Complete (2026-05-16) — Advanced Backtesting Enhancements
+**Commits:** `7b0aa1c`, `950303c`, `80788dc`
+
+### Task #A: Multi-period Validation ✅
+- New method: `run_multi_period_backtest(periods=3, lookback_days=60)` splits backtest into N contiguous periods
+- Reports per-period metrics (win_rate, avg_pnl_pct) + weighted overall average + consistency score
+- Consistency scoring penalizes high variance across periods; bonus if all profitable
+- Refactored: extracted `_run_backtest_on_files()` and `_simulate_trade_exit()` from `run_backtest()` for reuse
+- **Review:** Clean refactoring. Period splitting by file count (not calendar dates) is pragmatic given sparse weekend data. Consistency score formula (wr_std + pnl_std weighted 50/50 with all_profitable multiplier) provides actionable signal ✅
+
+### Task #B: Sector-adjusted Returns ✅
+- New method: `compute_sector_adjusted_returns(results=None)` computes alpha = stock_return - sector_benchmark
+- Benchmark: equal-weight average P&L per sector (proxy for TWSE sub-sector index)
+- Per-trade fields added: `sector_alpha`, `sector_benchmark_return`
+- Portfolio-level metrics: `sector_benchmarks`, `portfolio_alpha`, `sector_adjusted_sharpe` (annualized with sqrt(50))
+- **Review:** Reasonable proxy given pipeline doesn't have actual TWSE sub-sector index data. Edge cases handled (no trades, None values). Minor note: sqrt(50) for annualization assumes ~50 round-trips/year — could be more precise but acceptable ✅
+
+### Task #C: Drawdown Analysis ✅
+- New method: `compute_drawdown_analysis(results=None)` tracks peak-to-trough drawdown with recovery metrics
+- Reports: max_drawdown_pct, max/avg drawdown_duration, max/avg recovery_time, underwater_pct
+- Uses cumulative_pnl from backtest results (already tracked)
+- **Review:** Clean implementation. Drawdown periods correctly identified as peak→trough→recovery cycles. Edge case handling for insufficient data ✅
+
+### Taiwan-market Correctness:
+- Sector classification uses existing `_get_sector()` — properly maps TWSE 15 sub-sectors ✅
+- TPEx transaction costs (0.7%) unchanged in exit simulation ✅
+- Holiday-aware holding days (`_calc_holding_days`) preserved ✅
+
+### Pipeline Test Results:
+```
+✓ PIPELINE COMPLETE — 9/9 stages successful (36.4s)
+```
+
+### Dry Run Test: PASSED ✅ (all 80 tests)
+
