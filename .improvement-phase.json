@@ -1,6 +1,6 @@
 {
-  "current_phase": 29,
-  "phase_name": "Alert system overhaul — multi-channel notifications (Telegram + email), escalation rules for critical signals, digest mode to reduce noise, and smart alert deduplication",
+  "current_phase": 30,
+  "phase_name": "Market microstructure analysis — order book depth detection (when available), volume profile analysis (VPVR approximations from OHLCV), and gap-fill probability scoring based on historical patterns",
   "started_at": "2026-05-16T14:00:00+08:00",
   "completed_phases": [
     {
@@ -217,6 +217,14 @@
       "completed_at": "2026-05-16T14:00:00+08:00",
       "summary": "Three new methods added to PaperTrader: optimize_positions() uses Kelly-inspired sizing based on signal strength (Phase 27) with max 3x cap and sector diversification limit (15% per sector); compute_sector_rotation() analyzes rolling window of stage2 data to generate overweight/underweight signals; check_correlation_risk() computes pairwise Pearson correlation between holdings, reduces smaller position by 50% when correlation >0.85, reports effective portfolio beta.",
       "commit": "42ad5dd, 4ec4cbe, 6506f46"
+    },
+    {
+      "phase": 29,
+      "name": "Alert system overhaul — deduplication, escalation rules, daily digest mode, smart Taiwan-market formatting",
+      "started_at": "2026-05-16T14:00:00+08:00",
+      "completed_at": "2026-05-16T17:00:00+08:00",
+      "summary": "Four new features in telegram_alerts.py (now 897 lines): Alert deduplication with SHA-256 hash and configurable cooldown (4h default); escalation rules with 3 severity tiers (info/warning/critical) routing info to digest, warning immediate, critical always; daily digest mode batching info alerts into morning/evening digests; smart Taiwan-market formatting with Traditional Chinese regime names (常態/警戒/壓力/危機/黑天鵝), TWSE/TPEx board indicators (上市/上櫃), NT$ price conventions.",
+      "commit": "6d9f08e, 11f96d8, 8d7c037, cdd98b4"
     }
   ],
   "notes": "Phase 23 done. SQLite data layer provides efficient historical queries and cumulative tracking on top of existing JSON data files.",

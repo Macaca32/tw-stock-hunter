@@ -253,3 +253,45 @@ All fixes approved. Key Taiwan-market correctness verified:
 ```
 
 ### Dry Run Test: PASSED ✅ (all 80 tests)
+
+---
+
+## Phase 29 — Alert System Overhaul ✅ (2026-05-16)
+
+### Four commits: `6d9f08e`, `11f96d8`, `8d7c037`, `cdd98b4`
+All in `core/telegram_alerts.py` (now 897 lines, +650/-61 net).
+
+### Enhancement #1: Alert Deduplication ✅
+- New `_compute_message_hash()`, `_is_duplicate()`, `_record_alert_history()` — SHA-256 dedup with configurable cooldown (default 4 hours)
+- `alert_history.json` tracks last 100 alerts per type+stock combination
+- Prevents alert spam when same signal triggers repeatedly
+
+### Enhancement #2: Escalation Rules ✅
+- Three severity tiers: info(1)/warning(2)/critical(3) via `SEVERITY_MAP`
+- Info → digest only, Warning → immediate with relaxed rate limits, Critical → always sent immediately
+- Backward compatible: existing alert types map correctly (daily→info, regime_change→warning, stop_loss_hit→critical)
+
+### Enhancement #3: Daily Digest Mode ✅
+- `_add_to_pending_digest()`, `_send_pending_digest()` — batches info alerts into morning/evening digests
+- `pending_digest.json` stores queued alerts; flushes on next warning/critical or digest trigger
+- Reduces notification noise for non-critical signals
+
+### Enhancement #4: Smart Alert Formatting ✅
+- Traditional Chinese regime names: 常態, 警戒, 壓力, 危機, 黑天鵝 (via `REGIME_TC`)
+- Stock code formatting with TWSE/TPEx indicators (上市/上櫃) via `_format_stock_code()`
+- Price change formatting in NT$ convention via `_format_price_change()`
+- Critical alert special formatting via `_format_critical_alert()`
+
+### Taiwan-market Correctness:
+- Traditional Chinese throughout — no Simplified Chinese leaks ✅
+- Regime TC mappings cover all 5 tiers + unknown ✅
+- TWSE/TPEx board detection uses stock code ranges (1xxx-8xxx vs 6xxx-9xxx) ✅
+- NT$ price formatting uses Taiwan conventions ✅
+
+### Pipeline Test Results:
+```
+✓ PIPELINE COMPLETE — 9/9 stages successful (36.2s)
+  ✓ telegram_alerts completed in 0.0s (alert skipped - rate limited)
+```
+
+### Dry Run Test: PASSED ✅ (all 80 tests)
