@@ -63,3 +63,26 @@ All fixes approved. Key Taiwan-market correctness verified:
 - adj_close/adj_volume used consistently across momentum scoring ✅
 
 ### Dry Run Test: PASSED ✅ (exit code 0, expected warnings for weekend data sources)
+
+## Phase 24 Complete (2026-05-16) — Regression Fix + README Rewrite
+**Commits:** `473f530`, `cb4d95e`
+
+### Task #A: Stage1 Screen Regression Fix ✅
+- **Bug:** Pipeline failed with `score_technical_momentum() got an unexpected keyword argument 'daily_index'`
+- **Root cause:** Phase 22 commit (`0e91317`) added `daily_index=daily_index` to function call but didn't update signature
+- **Fix:** Added `daily_index=None` parameter to both `score_technical_momentum()` and `_score_momentum_single_day()`
+- **Backward compat:** Uses O(1) dict lookup when available, falls back to O(n) scan otherwise ✅
+- **Review:** Clean fix consistent with Phase 22 optimization pattern
+
+### Task #B: README Rewrite ✅
+- Complete rewrite covering all 24 phases of improvements (~480 lines)
+- Architecture diagram, pipeline flow ASCII art, Taiwan market specifics (TWSE/TPEx costs, ROC dates, stock dividends)
+- Setup instructions, testing guide, config file docs
+- **Review:** Comprehensive and well-structured ✅
+
+### Pipeline Test Results:
+- Stage1 screen: PASSED ✅ (63 passed, 73 watchlist, 223 rejected) — regression fixed!
+- Stage2 deep: FAILED ⚠️ (pre-existing issue — missing input file from stage1 output)
+- **Note:** Stage1 output file not saved to disk despite successful run. Separate pre-existing bug, unrelated to Phase 24.
+
+### Dry Run Test: PASSED ✅ (all 80 tests)

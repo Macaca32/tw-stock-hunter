@@ -1,7 +1,7 @@
 {
-  "current_phase": 24,
-  "phase_name": "Regression fix (stage1 daily_index), pipeline integration, backtest reporting",
-  "started_at": "2026-05-16T06:30:00+08:00",
+  "current_phase": 25,
+  "phase_name": "Pipeline integration — connect SQLite layer to screening stages + stage1 output bug fix",
+  "started_at": "2026-05-16T09:30:00+08:00",
   "completed_phases": [
     {
       "phase": 0,
