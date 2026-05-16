@@ -980,6 +980,150 @@ days would inflate holding period and trigger premature max_holding_days exits.
 
         return results
 
+    # ------------------------------------------------------------------ #
+    #  Phase 26: Drawdown analysis
+    # ------------------------------------------------------------------ #
+
+    def compute_drawdown_analysis(self, results=None):
+        """Compute detailed drawdown analysis from backtest results.
+
+        Phase 26: Tracks and reports maximum drawdown, average drawdown
+        duration, and recovery time from peak to new peak. Adds these
+        metrics to the backtest summary output alongside existing
+        win_rate/avg_pnl_pct.
+
+        A drawdown period is defined as: peak -> trough -> recovery (new peak).
+        Duration = trading sessions from peak to trough.
+        Recovery = trading sessions from trough to new peak.
+
+        Args:
+            results: Output from run_backtest(). If None, runs a fresh backtest
+                     with default lookback_days=60.
+
+        Returns:
+            The same results dict with an added "drawdown_analysis" field
+            containing max_drawdown_pct, max/avg drawdown duration,
+            max/avg recovery time, drawdown_periods list, and underwater stats.
+        """
+        if results is None:
+            results = self.run_backtest()
+
+        cumulative_pnl = results.get("cumulative_pnl", [])
+
+        if not cumulative_pnl or len(cumulative_pnl) < 2:
+            results["drawdown_analysis"] = {
+                "max_drawdown_pct": 0,
+                "max_drawdown_duration": 0,
+                "avg_drawdown_duration": 0,
+                "max_recovery_time": 0,
+                "avg_recovery_time": 0,
+                "drawdown_periods": [],
+                "underwater_count": 0,
+                "underwater_pct": 0,
+                "note": "Insufficient data for drawdown analysis",
+            }
+            return results
+
+        # Track equity curve and find drawdown periods
+        # A drawdown period starts when cumulative P&L drops below a previous
+        # peak and ends when it recovers to that peak level (or higher).
+        drawdown_periods = []
+        peak_idx = 0
+        peak_value = cumulative_pnl[0]
+        in_drawdown = False
+        dd_start_idx = None
+        trough_idx = None
+        trough_value = 0
+
+        for i in range(1, len(cumulative_pnl)):
+            val = cumulative_pnl[i]
+
+            if val >= peak_value:
+                # New peak reached
+                if in_drawdown:
+                    dd_pct = round(peak_value - trough_value, 2)
+                    duration = trough_idx - dd_start_idx
+                    recovery_time = i - trough_idx
+                    drawdown_periods.append({
+                        "peak_idx": dd_start_idx,
+                        "trough_idx": trough_idx,
+                        "recovery_idx": i,
+                        "drawdown_pct": dd_pct,
+                        "duration": duration,
+                        "recovery_time": recovery_time,
+                    })
+                    in_drawdown = False
+
+                peak_value = val
+                peak_idx = i
+            else:
+                # Below peak — in a drawdown
+                if not in_drawdown:
+                    in_drawdown = True
+                    dd_start_idx = peak_idx
+                    trough_idx = i
+                    trough_value = val
+                elif val < trough_value:
+                    trough_idx = i
+                    trough_value = val
+
+        # Handle unclosed drawdown (still in drawdown at end of data)
+        if in_drawdown:
+            dd_pct = round(peak_value - trough_value, 2)
+            duration = trough_idx - dd_start_idx
+            drawdown_periods.append({
+                "peak_idx": dd_start_idx,
+                "trough_idx": trough_idx,
+                "recovery_idx": None,  # No recovery yet
+                "drawdown_pct": dd_pct,
+                "duration": duration,
+                "recovery_time": None,
+            })
+
+        # Compute summary statistics
+        if drawdown_periods:
+            max_dd = max(drawdown_periods, key=lambda d: d["drawdown_pct"])
+            durations = [d["duration"] for d in drawdown_periods if d["duration"] > 0]
+            recoveries = [d["recovery_time"] for d in drawdown_periods
+                          if d["recovery_time"] is not None]
+
+            # Count underwater sessions: sessions where cumulative P&L < previous peak
+            underwater = 0
+            running_peak = cumulative_pnl[0]
+            for val in cumulative_pnl[1:]:
+                if val < running_peak:
+                    underwater += 1
+                else:
+                    running_peak = val
+
+            results["drawdown_analysis"] = {
+                "max_drawdown_pct": max_dd["drawdown_pct"],
+                "max_drawdown_duration": max_dd["duration"],
+                "avg_drawdown_duration": round(
+                    sum(durations) / len(durations), 1) if durations else 0,
+                "max_recovery_time": max(recoveries) if recoveries else 0,
+                "avg_recovery_time": round(
+                    sum(recoveries) / len(recoveries), 1) if recoveries else 0,
+                "drawdown_periods": drawdown_periods,
+                "underwater_count": underwater,
+                "underwater_pct": round(
+                    underwater / max(1, len(cumulative_pnl) - 1) * 100, 1),
+            }
+        else:
+            # No drawdown periods found (monotonically increasing equity)
+            results["drawdown_analysis"] = {
+                "max_drawdown_pct": 0,
+                "max_drawdown_duration": 0,
+                "avg_drawdown_duration": 0,
+                "max_recovery_time": 0,
+                "avg_recovery_time": 0,
+                "drawdown_periods": [],
+                "underwater_count": 0,
+                "underwater_pct": 0,
+            }
+
+        return results
+
     def save_trades(self):
         """Save trades to file"""
         trades_file = self.data_dir / "paper_trades.json"
@@ -1025,6 +1169,8 @@ def main():
                         help="Run multi-period validation with N periods")
     parser.add_argument("--sector-adjusted", dest="sector_adjusted", action="store_true",
                         help="Include sector-adjusted returns analysis")
+    parser.add_argument("--drawdown-analysis", dest="drawdown_analysis", action="store_true",
+                        help="Include detailed drawdown analysis")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
     args = parser.parse_args()
 
@@ -1062,6 +1208,10 @@ def main():
         if args.sector_adjusted:
             results = trader.compute_sector_adjusted_returns(results)
 
+        # Phase 26: Optional drawdown analysis
+        if args.drawdown_analysis:
+            results = trader.compute_drawdown_analysis(results)
+
         if args.verbose:
             print("Backtest Results:")
             print(f"   Total trades: {results['total_trades']}")
@@ -1076,6 +1226,16 @@ def main():
                 print(f"     Sector-adj Sharpe: {sa.get('sector_adjusted_sharpe', 0)}")
                 for sector, bench in sa.get("sector_benchmarks", {}).items():
                     print(f"     {sector} benchmark: {bench}%")
+
+            if "drawdown_analysis" in results:
+                da = results["drawdown_analysis"]
+                print(f"\n   Drawdown Analysis:")
+                print(f"     Max drawdown: {da.get('max_drawdown_pct', 0)}%")
+                print(f"     Max DD duration: {da.get('max_drawdown_duration', 0)} sessions")
+                print(f"     Avg DD duration: {da.get('avg_drawdown_duration', 0)} sessions")
+                print(f"     Max recovery time: {da.get('max_recovery_time', 0)} sessions")
+                print(f"     Avg recovery time: {da.get('avg_recovery_time', 0)} sessions")
+                print(f"     Underwater: {da.get('underwater_pct', 0)}% of sessions")
     else:
         # Simulate today
         candidates = trader.load_candidates(args.date)
