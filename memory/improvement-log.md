@@ -507,7 +507,7 @@ Taiwan market conventions verified: TWSE codes (2330, 2454), Traditional Chinese
 
 ### Pipeline Test: PASSED ✅
 ```
-10/10 stages successful in 41.0s
+10/10 stages successful in 43.5s
 Stage 1: 1 passed, 15 watchlist, 1343 rejected
 Stage 2: 1 passed, 0 disqualified
 ```
