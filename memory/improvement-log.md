@@ -595,4 +595,35 @@ Signal Fusion: 1 stocks scored, avg=0.667, high-conviction=1
 ```
 
 ### Dry Run Test: PASSED ✅ (all 79 signal_fusion tests)
+
+## Phase 38 — Portfolio Optimization Engine (2026-05-17)
+
+**Status:** ✅ COMPLETE  
+**Commits:** `79587cb`, `34c4817`, `0eb32ef` (3 commits)  
+**Code review:** ✅ Taiwan-market correct, backward compatible
+
+### What Changed
+- **core/portfolio_optimizer.py** (~1333 lines): Mean-variance and Black-Litterman portfolio optimization with Taiwan market constraints. Features: load_ensemble_results() reads Phase 37 output, compute_covariance_matrix() builds empirical covariance with holiday forward-fill, optimize_mean_variance() solves Markowitz with Taiwan constraints (stock ≤8%, sector ≤25%, min 1% position, long-only), optimize_black_litterman() implements BL framework with ensemble-derived views, apply_weight_smoothing() integrates Phase 6 max 5% daily change limit, validate_constraints() checks Phases 5/36 risk constraints, run_portfolio_optimizer() is the Stage 12 pipeline entry point. Uses scipy.optimize when available, falls back to iterative heuristic optimizer.
+- **run_pipeline.py**: Stage 12 portfolio_optimizer added after signal_fusion
+- **tests/test_portfolio_optimizer.py** (~1146 lines): 73 tests, all passing, zero API calls
+
+### Review Notes
+- Traditional Chinese labels throughout ✓
+- Taiwan regulatory constraints correctly enforced (8% single stock cap per SEC guidelines) ✓
+- Backward compatible — skips gracefully if ensemble results missing ✓
+- scipy fallback: iterative heuristic optimizer handles environments without scipy ✓
+- Covariance matrix uses holiday-aware forward-fill for sparse Taiwan market data ✓
+- Weight smoothing respects Phase 6 max 5% daily position change limit ✓
+- Black-Litterman views derived from ensemble scores with proper confidence scaling ✓
+- Graceful degradation when correlation data insufficient (min 20 samples) ✓
+
+### Pipeline Test: PASSED ✅
+```
+12/12 stages successful in ~45s
+Stage 1: 1 passed, 15 watchlist, 1343 rejected
+Stage 2: 1 passed, 0 disqualified
+Portfolio Optimizer: optimized weights produced, constraints validated
+```
+
+### Unit Tests: PASSED ✅ (73/73)
 ---
