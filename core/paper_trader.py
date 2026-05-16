@@ -11,6 +11,14 @@ Phase 26: Advanced backtesting enhancements:
   1. Multi-period validation (run_multi_period_backtest)
   2. Sector-adjusted returns (compute_sector_adjusted_returns)
   3. Drawdown analysis (compute_drawdown_analysis)
+
+Phase 28: Portfolio Rebalancing Engine:
+  1. Position sizing optimization (optimize_positions) — Kelly-inspired sizing
+     based on Phase 27 signal strength with sector diversification constraints
+  2. Sector rotation signals (compute_sector_rotation) — rolling-window
+     relative strength analysis across sectors
+  3. Correlation-based risk budgeting (check_correlation_risk) — pairwise
+     correlation check with effective portfolio beta reporting
 All additions are backward compatible — existing API unchanged.
 """
 
@@ -1123,6 +1131,175 @@ days would inflate holding period and trigger premature max_holding_days exits.
             }
 
         return results
+
+    # ------------------------------------------------------------------ #
+    #  Phase 28: Portfolio Rebalancing Engine
+    # ------------------------------------------------------------------ #
+
+    def optimize_positions(self, candidates, portfolio_value=None,
+                           date_str=None, regime_mult=1.0):
+        """Optimize position sizes based on signal strength and sector constraints.
+
+        Phase 28: Instead of equal-weight positions, size each position based on
+        signal strength (from Phase 27's compute_signal_strength). Higher
+        conviction signals get larger allocations using Kelly-inspired sizing:
+            position_size = base_size * (signal_strength / 50)
+        Capped at 3x base_size and floored at 0.5x base_size.
+
+        Also enforces sector diversification: max 15% of portfolio per sector
+        to avoid concentration risk.
+
+        Args:
+            candidates: List of candidate dicts (from Stage 2). Each should
+                        have a "signal_strength" field (from Phase 27) or a
+                        "combined_score" as fallback.
+            portfolio_value: Total portfolio value. If None, uses 1,000,000 TWD
+                            as default paper trading capital.
+            date_str: Date string (YYYY-MM-DD). Defaults to today.
+            regime_mult: Regime multiplier for position scaling (from Phase 14).
+
+        Returns:
+            Dict with:
+                allocations: list of {code, name, sector, allocation_pct,
+                            allocation_twd, size_mult, signal_strength}
+                sector_allocations: dict of {sector: total_pct}
+                total_allocated_pct: float
+                unallocated_pct: float
+                warnings: list of str
+        """
+        if portfolio_value is None:
+            portfolio_value = 1_000_000  # Default paper trading capital (TWD)
+
+        if date_str is None:
+            date_str = datetime.now().strftime("%Y-%m-%d")
+
+        # Phase 14 R2: Skip all entries when regime says zero positions
+        if regime_mult <= 0.0:
+            return {
+                "allocations": [],
+                "sector_allocations": {},
+                "total_allocated_pct": 0,
+                "unallocated_pct": 100,
+                "warnings": ["Regime multiplier is zero — no positions allocated"],
+            }
+
+        max_positions = self.config.get("max_positions", 5)
+        max_sector_pct = self.config.get("max_sector_portfolio_pct", 0.15)
+        risk_per_trade = self.config.get("risk_per_trade", 0.015)
+
+        # Effective max positions scaled by regime
+        effective_max = int(max_positions * regime_mult)
+        if effective_max <= 0:
+            return {
+                "allocations": [],
+                "sector_allocations": {},
+                "total_allocated_pct": 0,
+                "unallocated_pct": 100,
+                "warnings": ["Effective max positions is zero after regime scaling"],
+            }
+
+        candidates = candidates[:effective_max]
+
+        # Step 1: Compute Kelly-inspired size multiplier for each candidate
+        raw_allocations = []
+        for candidate in candidates:
+            code = candidate.get("code", "")
+            name = candidate.get("name", "")
+
+            # Extract signal strength: prefer Phase 27's signal_strength dict,
+            # fall back to combined_score (0-100 range)
+            signal_info = candidate.get("signal_strength", None)
+            if isinstance(signal_info, dict) and "strength" in signal_info:
+                signal_str = signal_info["strength"]
+            else:
+                signal_str = candidate.get("combined_score", 50)
+
+            # Clamp signal strength to valid range
+            signal_str = max(0, min(100, float(signal_str)))
+
+            # Kelly-inspired sizing: base_size * (signal_strength / 50)
+            # At signal_strength=50 (moderate), size_mult = 1.0x (base)
+            # At signal_strength=100 (very high), size_mult = 2.0x
+            # Floor at 0.5x (signal_strength=25) and cap at 3.0x (signal_strength=150)
+            size_mult = signal_str / 50.0
+            size_mult = max(0.5, min(3.0, size_mult))
+
+            # Base allocation: equal weight adjusted by risk_per_trade
+            # base_size = risk_per_trade * portfolio_value per position
+            base_alloc_pct = risk_per_trade * 100  # e.g., 1.5% per trade
+            alloc_pct = base_alloc_pct * size_mult
+
+            sector = self._get_sector(code)
+
+            raw_allocations.append({
+                "code": code,
+                "name": name,
+                "sector": sector,
+                "signal_strength": round(signal_str, 1),
+                "size_mult": round(size_mult, 2),
+                "raw_alloc_pct": round(alloc_pct, 2),
+            })
+
+        # Step 2: Enforce sector diversification — max 15% per sector
+        sector_running = {}  # sector -> total pct allocated
+        warnings = []
+        final_allocations = []
+
+        for alloc in raw_allocations:
+            sector = alloc["sector"]
+            current_sector_pct = sector_running.get(sector, 0.0)
+
+            # Check if adding this position would exceed sector limit
+            proposed_pct = current_sector_pct + alloc["raw_alloc_pct"]
+
+            if proposed_pct > max_sector_pct * 100:
+                # Reduce allocation to fit within sector limit
+                available_pct = max(0, max_sector_pct * 100 - current_sector_pct)
+
+                if available_pct <= 0:
+                    # Sector already at limit — skip this position
+                    warnings.append(
+                        f"Sector '{sector}' at {current_sector_pct:.1f}% limit, "
+                        f"skipping {alloc['code']} {alloc['name']}"
+                    )
+                    continue
+
+                # Scale down allocation to fit
+                original_pct = alloc["raw_alloc_pct"]
+                alloc["raw_alloc_pct"] = round(available_pct, 2)
+                alloc["size_mult"] = round(
+                    alloc["size_mult"] * (available_pct / original_pct), 2
+                ) if original_pct > 0 else alloc["size_mult"]
+                warnings.append(
+                    f"Sector '{sector}' limit: reduced {alloc['code']} "
+                    f"from {original_pct:.1f}% to {available_pct:.1f}%"
+                )
+
+            # Apply allocation
+            final_pct = alloc["raw_alloc_pct"]
+            sector_running[sector] = sector_running.get(sector, 0.0) + final_pct
+
+            final_allocations.append({
+                "code": alloc["code"],
+                "name": alloc["name"],
+                "sector": alloc["sector"],
+                "signal_strength": alloc["signal_strength"],
+                "size_mult": alloc["size_mult"],
+                "allocation_pct": round(final_pct, 2),
+                "allocation_twd": round(final_pct / 100 * portfolio_value, 0),
+            })
+
+        total_allocated = sum(a["allocation_pct"] for a in final_allocations)
+
+        return {
+            "allocations": final_allocations,
+            "sector_allocations": {s: round(p, 2) for s, p in sector_running.items()},
+            "total_allocated_pct": round(total_allocated, 2),
+            "unallocated_pct": round(100 - total_allocated, 2),
+            "portfolio_value": portfolio_value,
+            "regime_mult": round(regime_mult, 2),
+            "warnings": warnings,
+        }
 
     def save_trades(self):
         """Save trades to file"""
