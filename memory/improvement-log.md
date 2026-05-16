@@ -479,3 +479,35 @@ Taiwan market conventions verified: TWSE codes (2330, 2454), Traditional Chinese
 - Taiwan stock codes used throughout (2330=TSMC, 2454=MediaTek)
 - Traditional Chinese regime names verified in report_generator tests
 - HTML lang="zh-TW" attribute tested explicitly
+
+## Phase 34 Complete (2026-05-16) — Cross-asset Correlation Engine
+**Commits:** `c9c999c, 29dda61, 6263a41` (3 commits)
+
+### New Files:
+- **`core/market_context.py`** (~575 lines) — cross-asset correlation engine with yfinance integration
+
+### Features Implemented:
+1. **fetch_cross_assets()** — pulls TAIEX futures (^TWII), USD/TWD (TWDUSD=X), HSI (^HSI), KWEB, VIX (^VIX) via yfinance with 6h TTL cache in data/market_context_cache.json
+2. **compute_market_breadth()** — advance/decline ratio from Stage 1 pass/watchlist/rejected counts + cross-asset correlation matrix (TAIEX vs HSI, USD/TWD inverse vs TAIEX, VIX vs TAIEX)
+3. **get_cross_asset_signal()** → returns -0.2 to +0.2 adjustment based on:
+   - Global risk sentiment: VIX <15=+0.1, >25=-0.1
+   - USD/TWD trend: NT$ strengthening = bad for exports (-0.1)
+   - HSI momentum vs TAIEX divergence: ±0.1
+4. **Integration into regime_detector.py** — `_apply_cross_asset_override()` as optional 6th regime input; shifts regime one tier when signal >±0.15 (BLACK_SWAN never overridden upward by cross-asset alone)
+5. **Integration into stage2_deep.py** — cross_asset_signal scaled from [-0.2, +0.2] to [-3, +3] points added to combined_score
+6. **Backward compatible** — all functions return neutral defaults on fetch failure; no new hard dependencies (yfinance already in requirements.txt)
+7. **Taiwan-market aware** — Traditional Chinese labels for reporting
+
+### Implementation Review ✅
+- **Cache:** 6h TTL with graceful expiry, JSON format with timestamp tracking
+- **Fallbacks:** Every yfinance call wrapped in try/except; neutral defaults (None latest, 0 change) prevent pipeline breaks
+- **Regime integration:** Cross-asset override only shifts by one tier; BLACK_SWAN protected from auto-promotion via cross-asset alone
+- **Stage 2 scoring:** Signal scaled linearly (-0.2→-3pts, +0.2→+3pts), clamped to [-3, +3]
+- **Correlation matrix:** Pearson correlation with minimum 5 data points requirement; handles edge cases (zero variance, insufficient data)
+
+### Pipeline Test: PASSED ✅
+```
+10/10 stages successful in 41.0s
+Stage 1: 1 passed, 15 watchlist, 1343 rejected
+Stage 2: 1 passed, 0 disqualified
+```
