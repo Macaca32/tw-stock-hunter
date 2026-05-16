@@ -1,6 +1,6 @@
 {
-  "current_phase": 30,
-  "phase_name": "Market microstructure analysis — order book depth detection (when available), volume profile analysis (VPVR approximations from OHLCV), and gap-fill probability scoring based on historical patterns",
+  "current_phase": 31,
+  "phase_name": "News sentiment integration — scrape Taiwan financial news (UDN, CBN, Anue), classify sentiment with keyword matching and NLP-lite scoring, integrate sentiment signal into Stage 2 deep analysis",
   "started_at": "2026-05-16T14:00:00+08:00",
   "completed_phases": [
     {
@@ -225,6 +225,14 @@
       "completed_at": "2026-05-16T17:00:00+08:00",
       "summary": "Four new features in telegram_alerts.py (now 897 lines): Alert deduplication with SHA-256 hash and configurable cooldown (4h default); escalation rules with 3 severity tiers (info/warning/critical) routing info to digest, warning immediate, critical always; daily digest mode batching info alerts into morning/evening digests; smart Taiwan-market formatting with Traditional Chinese regime names (常態/警戒/壓力/危機/黑天鵝), TWSE/TPEx board indicators (上市/上櫃), NT$ price conventions.",
       "commit": "6d9f08e, 11f96d8, 8d7c037, cdd98b4"
+    },
+    {
+      "phase": 30,
+      "name": "Market microstructure analysis — volume profile (VPVR), gap-fill probability, volume anomaly detection, intraday candlestick pattern recognition",
+      "started_at": "2026-05-16T14:30:00+08:00",
+      "completed_at": "2026-05-16T17:30:00+08:00",
+      "summary": "Four new functions across stage1_screen.py (+298 lines) and stage2_deep.py (+378 lines): compute_volume_profile() approximates VPVR with adaptive bin sizes (NT\\/5/10); compute_gap_fill_probability() analyzes historical gap patterns with fill rate stats; detect_volume_anomalies() flags institutional interest/low conviction via 20-day rolling median; classify_intraday_pattern() recognizes 9 candlestick types. Microstructure adjustments integrated into Stage 1 composite scoring (capped ±10 points). All use adjusted prices/volumes from Phase 2.",
+      "commit": "e3ee417, a56e4e8"
     }
   ],
   "notes": "Phase 23 done. SQLite data layer provides efficient historical queries and cumulative tracking on top of existing JSON data files.",

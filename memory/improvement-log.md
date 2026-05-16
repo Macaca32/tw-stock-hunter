@@ -295,3 +295,54 @@ All in `core/telegram_alerts.py` (now 897 lines, +650/-61 net).
 ```
 
 ### Dry Run Test: PASSED ✅ (all 80 tests)
+
+---
+
+## Phase 30 — Market Microstructure Analysis ✅ (2026-05-16)
+
+### Two commits: `e3ee417`, `a56e4e8`
+Modified files: `core/stage1_screen.py` (+298 lines), `core/stage2_deep.py` (+378 lines).
+
+### Enhancement #1: Volume Profile Analysis (VPVR Approximation) ✅
+- New function: `compute_volume_profile()` in stage2_deep.py — bins adjusted prices into NT$1 intervals (<$30 stocks), NT$5 ($30-$100), or NT$10 (>$100) intervals
+- Computes Volume Point of Control (POC) and 67% Value Area around POC
+- Support/resistance quality score (0-100): near POC → stronger signals, within value area → +10 bonus
+- Uses adjusted prices/volumes from Phase 2 for corporate-action correctness ✅
+
+### Enhancement #2: Gap-Fill Probability Scoring ✅
+- New function: `compute_gap_fill_probability()` in stage1_screen.py — analyzes historical gap patterns (>0.5% threshold)
+- Computes fill rates within 5/10/20 trading days, average fill time, current gap vs median ratio
+- Timing adjustment (-8 to +3): high fill rate → wait for confirmation, low fill rate → directional conviction boost
+- Taiwan-market aware: uses adjusted prices so ex-dividend gaps don't distort analysis ✅
+
+### Enhancement #3: Volume Anomaly Detection ✅
+- New function: `detect_volume_anomalies()` in stage1_screen.py — compares current volume to 20-day rolling median
+- Flags institutional interest (>3x median), low conviction (<0.3x median), and volume trend (5-day linear regression)
+- Score adjustment (-5 to +7): institutional volume boosts, low conviction penalizes, rising volume supports signal
+- Uses adjusted volumes from Phase 2 ✅
+
+### Enhancement #4: Intraday Pattern Recognition ✅
+- New function: `classify_intraday_pattern()` in stage2_deep.py — classifies OHLC candlestick patterns
+- Recognized patterns: doji (indecision), hammer/shooting star (reversal), inside bar (consolidation), marubozu (strong continuation), engulfing approximation
+- Sentiment score (-0.5 to +0.5) with confidence level (high/medium/low) per pattern
+- Handles Taiwan 10% price limits naturally through body/range ratios ✅
+
+### Integration:
+- Stage 1 (`run_stage1()`): Applies `micro_adjustment` (gap_fill timing + volume anomaly score, capped ±10 points) to composite_score before pass/watchlist thresholds
+- Result dict includes `micro_adjustment`, `adjusted_composite`, and raw microstructure data for downstream consumers
+- Backward compatible: new fields are additions, existing scoring logic preserved ✅
+
+### Taiwan-market Correctness:
+- All functions use adjusted prices/volumes (Phase 2 corporate-action handling) ✅
+- Gap detection threshold (>0.5%) avoids noise from Taiwan's tight spreads ✅
+- Volume profile bin sizes adapt to stock price range (cheaper stocks get finer bins) ✅
+- Price limit awareness implicit in pattern classification ratios ✅
+
+### Pipeline Test Results:
+```
+✓ PIPELINE COMPLETE — 9/9 stages successful (39.5s)
+  ✓ stage1_screen: 2.1s (1 passed, 15 watchlist, 1343 rejected)
+  ✓ stage2_deep: 0.1s (1 passed, 0 disqualified)
+```
+
+### Dry Run Test: PASSED ✅ (all 80 tests)
