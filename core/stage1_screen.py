@@ -879,6 +879,97 @@ def _score_momentum_single_day(stock_code, daily_data, daily_index=None):
         return 25
 
 
+def compute_signal_strength(scores, composite_score, weights_dict):
+    """Phase 27: Compute continuous signal strength metric (0-100).
+
+    Replaces binary pass/fail with nuanced signal conviction scoring.
+    A stock scoring 95 should be treated differently from one scoring 55
+    even if both "pass" the threshold.
+
+    Signal strength reflects:
+    - Composite magnitude (how far above/below threshold)
+    - Score concentration (are all dimensions aligned, or one dominant?)
+    - Breadth (how many dimensions contribute meaningfully?)
+
+    Returns dict with:
+        strength: float 0-100 (raw signal strength)
+        conviction: str ("very_high" / "high" / "moderate" / "low" / "very_low")
+        grade: str ("A+" / "A" / "B+" / "B" / "C" / "D")
+        dominant_dimension: str (which dimension contributes most)
+        alignment: float 0-1 (how aligned are all dimensions)
+    """
+    if not scores or composite_score <= 0:
+        return {
+            "strength": 0.0,
+            "conviction": "very_low",
+            "grade": "D",
+            "dominant_dimension": "none",
+            "alignment": 0.0,
+        }
+
+    # --- 1. Composite magnitude (0-100, directly from weighted score) ---
+    magnitude = composite_score
+
+    # --- 2. Score concentration / alignment ---
+    # If all dimensions are close to each other, alignment is high.
+    # If one dimension is very high and others very low, alignment is low.
+    score_values = list(scores.values())
+    if len(score_values) < 2:
+        alignment = 0.5
+    else:
+        mean_score = sum(score_values) / len(score_values)
+        variance = sum((s - mean_score) ** 2 for s in score_values) / len(score_values)
+        # Max variance for 0-100 scores is 2500 (all 0 or 100).
+        # Normalize to 0-1 where 1 = perfectly aligned.
+        alignment = max(0.0, 1.0 - (variance / 2500.0))
+
+    # --- 3. Breadth: how many dimensions contribute meaningfully (>40)? ---
+    contributing = sum(1 for s in score_values if s >= 40)
+    breadth_ratio = contributing / len(score_values) if score_values else 0
+
+    # --- 4. Dominant dimension ---
+    dominant_dimension = max(scores, key=scores.get) if scores else "none"
+
+    # --- 5. Combined signal strength ---
+    # Weighted blend: magnitude 60%, alignment 25%, breadth 15%
+    strength = magnitude * 0.60 + alignment * 100 * 0.25 + breadth_ratio * 100 * 0.15
+    strength = round(max(0.0, min(100.0, strength)), 1)
+
+    # --- 6. Conviction level ---
+    if strength >= 85:
+        conviction = "very_high"
+    elif strength >= 70:
+        conviction = "high"
+    elif strength >= 50:
+        conviction = "moderate"
+    elif strength >= 30:
+        conviction = "low"
+    else:
+        conviction = "very_low"
+
+    # --- 7. Grade ---
+    if strength >= 90:
+        grade = "A+"
+    elif strength >= 80:
+        grade = "A"
+    elif strength >= 70:
+        grade = "B+"
+    elif strength >= 55:
+        grade = "B"
+    elif strength >= 40:
+        grade = "C"
+    else:
+        grade = "D"
+
+    return {
+        "strength": strength,
+        "conviction": conviction,
+        "grade": grade,
+        "dominant_dimension": dominant_dimension,
+        "alignment": round(alignment, 3),
+    }
+
+
 def _validate_candidates(candidates, verbose=True):
     """Phase 9: Validate Stage 1 candidates via Pydantic schema.
     
@@ -1062,13 +1153,17 @@ def run_stage1(date_str=None, verbose=False):
             scores["flow"] * stage1_weights["institutional_flow"] +
             scores["momentum"] * stage1_weights["technical_momentum"]
         )
-        
+
+        # Phase 27: Compute signal strength (continuous conviction metric)
+        signal_strength = compute_signal_strength(scores, round(composite, 1), stage1_weights)
+
         result = {
             "code": code,
             "name": name,
             "close": float(get_field(stock, "收盤價", "ClosingPrice", 0)),
             "composite_score": round(composite, 1),
             "score_breakdown": scores,
+            "signal_strength": signal_strength,
             "pass": composite >= thresholds["stage1"]["pass_threshold"]
         }
         
