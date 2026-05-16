@@ -1301,6 +1301,177 @@ days would inflate holding period and trigger premature max_holding_days exits.
             "warnings": warnings,
         }
 
+    def compute_sector_rotation(self, date_str=None, rolling_window=5):
+        """Analyze sector rotation signals based on relative strength/weakness.
+
+        Phase 28: Compares average signal scores across sectors over a rolling
+        window (last N trading days). Generates rotation signals:
+        - "overweight": sectors with improving momentum (rising average scores)
+        - "underweight": sectors with declining momentum (falling average scores)
+        - "neutral": sectors with stable scores
+
+        The rotation signal is determined by comparing the current period's
+        average score against the rolling window average. A sector is
+        "overweight" if its current score exceeds the rolling average by more
+        than one standard deviation, "underweight" if it falls below by more
+        than one standard deviation, and "neutral" otherwise.
+
+        Args:
+            date_str: Reference date (YYYY-MM-DD). Defaults to today.
+                      Only uses data up to this date to avoid look-ahead bias.
+            rolling_window: Number of recent trading days to analyze (default 5).
+
+        Returns:
+            Dict with:
+                sectors: dict of {sector: {signal, current_avg, rolling_avg,
+                         momentum, score_count}}
+                overweight_sectors: list of sector names
+                underweight_sectors: list of sector names
+                neutral_sectors: list of sector names
+                rolling_window: int
+                date: str
+        """
+        if date_str is None:
+            date_str = datetime.now().strftime("%Y-%m-%d")
+
+        # Collect stage2 files for the rolling window period
+        stage2_files = sorted(self.data_dir.glob("stage2_*.json"))
+        if not stage2_files:
+            return {
+                "sectors": {},
+                "overweight_sectors": [],
+                "underweight_sectors": [],
+                "neutral_sectors": [],
+                "rolling_window": rolling_window,
+                "date": date_str,
+                "note": "No historical Stage 2 data found",
+            }
+
+        # Filter files up to date_str and take the rolling window
+        cutoff = date_str
+        valid_files = [f for f in stage2_files
+                       if f.stem.replace("stage2_", "") <= cutoff]
+
+        if not valid_files:
+            return {
+                "sectors": {},
+                "overweight_sectors": [],
+                "underweight_sectors": [],
+                "neutral_sectors": [],
+                "rolling_window": rolling_window,
+                "date": date_str,
+                "note": "No data files on or before the given date",
+            }
+
+        # Take the last `rolling_window` files
+        window_files = valid_files[-rolling_window:]
+
+        # Collect per-day per-sector scores
+        # Structure: {sector: [day_avg_score, ...]} — one entry per day
+        sector_daily_scores = {}
+        sector_stock_counts = {}
+
+        for filepath in window_files:
+            file_date = filepath.stem.replace("stage2_", "")
+
+            try:
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            except (json.JSONDecodeError, IOError):
+                continue
+
+            candidates = data.get("candidates", [])
+            if not candidates:
+                continue
+
+            # Group candidates by sector for this day
+            day_sector_scores = {}  # sector -> [score, ...]
+            for cand in candidates:
+                code = cand.get("code", "")
+                sector = self._get_sector(code)
+
+                # Use signal_strength if available (Phase 27), else combined_score
+                signal_info = cand.get("signal_strength", None)
+                if isinstance(signal_info, dict) and "strength" in signal_info:
+                    score = signal_info["strength"]
+                else:
+                    score = cand.get("combined_score", 0)
+
+                score = float(score) if score else 0.0
+                day_sector_scores.setdefault(sector, []).append(score)
+
+            # Compute daily average per sector
+            for sector, scores in day_sector_scores.items():
+                avg = sum(scores) / len(scores) if scores else 0
+                sector_daily_scores.setdefault(sector, []).append(avg)
+                sector_stock_counts[sector] = max(
+                    sector_stock_counts.get(sector, 0), len(scores)
+                )
+
+        if not sector_daily_scores:
+            return {
+                "sectors": {},
+                "overweight_sectors": [],
+                "underweight_sectors": [],
+                "neutral_sectors": [],
+                "rolling_window": rolling_window,
+                "date": date_str,
+                "note": "No sector scores found in rolling window",
+            }
+
+        # Compute rotation signals per sector
+        sector_results = {}
+        overweight = []
+        underweight = []
+        neutral = []
+
+        for sector, daily_scores in sector_daily_scores.items():
+            if not daily_scores:
+                continue
+
+            current_avg = daily_scores[-1]  # Most recent day
+            rolling_avg = sum(daily_scores) / len(daily_scores)
+
+            # Compute standard deviation for threshold
+            if len(daily_scores) >= 2:
+                variance = sum((s - rolling_avg) ** 2 for s in daily_scores) / len(daily_scores)
+                std_dev = math.sqrt(variance)
+            else:
+                std_dev = 5.0  # Default threshold for single-day data
+
+            # Momentum: current vs rolling average
+            momentum = current_avg - rolling_avg
+
+            # Determine signal based on standard deviation bands
+            if std_dev > 0 and momentum > std_dev:
+                signal = "overweight"
+                overweight.append(sector)
+            elif std_dev > 0 and momentum < -std_dev:
+                signal = "underweight"
+                underweight.append(sector)
+            else:
+                signal = "neutral"
+                neutral.append(sector)
+
+            sector_results[sector] = {
+                "signal": signal,
+                "current_avg": round(current_avg, 2),
+                "rolling_avg": round(rolling_avg, 2),
+                "momentum": round(momentum, 2),
+                "std_dev": round(std_dev, 2),
+                "days_in_window": len(daily_scores),
+                "stock_count": sector_stock_counts.get(sector, 0),
+            }
+
+        return {
+            "sectors": sector_results,
+            "overweight_sectors": overweight,
+            "underweight_sectors": underweight,
+            "neutral_sectors": neutral,
+            "rolling_window": rolling_window,
+            "date": date_str,
+        }
+
     def save_trades(self):
         """Save trades to file"""
         trades_file = self.data_dir / "paper_trades.json"
