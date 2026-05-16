@@ -1,7 +1,7 @@
 {
-  "version": "5.0",
-  "updated": "2026-05-16",
-  "notes": "Phase 31: Added news_sentiment weight to stage2; rebalanced other weights to sum to 1.0",
+  "version": "6.0",
+  "updated": "2026-05-17",
+  "notes": "Phase 35: Added earnings_growth weight to stage2; rebalanced other weights to sum to 1.0",
   "stage1": {
     "revenue_momentum": 0.20,
     "profitability": 0.25,
@@ -10,12 +10,13 @@
     "technical_momentum": 0.20
   },
   "stage2": {
-    "dividend": 0.22,
-    "announcements": 0.18,
-    "shareholders": 0.13,
-    "pledge": 0.18,
-    "penalties": 0.18,
-    "news_sentiment": 0.11
+    "dividend": 0.20,
+    "announcements": 0.16,
+    "shareholders": 0.12,
+    "pledge": 0.16,
+    "penalties": 0.12,
+    "news_sentiment": 0.12,
+    "earnings_growth": 0.12
   },
   "regime_weights": {
     "normal": {
