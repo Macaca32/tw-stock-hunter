@@ -970,6 +970,232 @@ def compute_signal_strength(scores, composite_score, weights_dict):
     }
 
 
+def compute_signal_confidence(stock_code, scores, price_history=None,
+                              company_info=None, pe_index=None,
+                              flow_data=None, margin_data=None,
+                              regime="unknown", margin_index=None,
+                              daily_index=None, revenue_index=None):
+    """Phase 27: Compute per-dimension confidence scores (0-100).
+
+    Confidence reflects data quality and consistency for each signal component.
+    High confidence = score is reliable; low confidence = score may be noisy.
+
+    Rules per dimension:
+    - Technical: Higher confidence when price history > 1 year and low missing data
+    - Fundamental: Higher confidence when recent financials available (within last quarter)
+    - Momentum: Lower confidence during high-volatility regimes (stress/crisis/black_swan)
+    - Volume: Lower confidence if ADV is borderline (< NT$100M)
+    - Revenue: Higher confidence when YoY data available and consistent
+
+    Returns dict mapping each dimension name to a confidence dict:
+        {dimension: {"confidence": float 0-100, "factors": [str list of influencing factors]}}
+    """
+    confidence = {}
+
+    # --- Technical confidence ---
+    tech_factors = []
+    tech_conf = 50.0  # Base
+
+    if price_history and stock_code in price_history:
+        history = price_history[stock_code]
+        n_days = len(history)
+
+        # History length bonus
+        if n_days >= 252:  # ~1 year of trading days
+            tech_conf += 25.0
+            tech_factors.append("1yr+_history")
+        elif n_days >= 60:
+            tech_conf += 15.0
+            tech_factors.append("60d+_history")
+        elif n_days >= 20:
+            tech_conf += 5.0
+            tech_factors.append("20d+_history")
+        else:
+            tech_conf -= 10.0
+            tech_factors.append("short_history")
+
+        # Missing data penalty
+        if n_days >= 20:
+            closes = [h.get("adj_close") or h.get("close") or 0 for h in history[-20:]]
+            zeros = sum(1 for c in closes if c == 0)
+            missing_ratio = zeros / 20.0
+            if missing_ratio > 0.1:
+                tech_conf -= missing_ratio * 30.0
+                tech_factors.append(f"missing_data_{missing_ratio:.0%}")
+            else:
+                tech_conf += 10.0
+                tech_factors.append("complete_data")
+    else:
+        # No price history at all — single-day fallback used
+        tech_conf -= 20.0
+        tech_factors.append("no_price_history")
+
+    confidence["momentum"] = {
+        "confidence": round(max(0.0, min(100.0, tech_conf)), 1),
+        "factors": tech_factors,
+    }
+
+    # --- Fundamental confidence (profitability + valuation) ---
+    fund_factors = []
+    fund_conf = 50.0
+
+    # PE data availability
+    has_pe = False
+    if pe_index is not None:
+        pe_record = pe_index.get(stock_code)
+        if pe_record:
+            has_pe = True
+            pe_str = pe_record.get("PEratio") or pe_record.get("本益比") or ""
+            pb_str = pe_record.get("PBratio") or pe_record.get("股價淨值比") or ""
+            div_str = pe_record.get("DividendYield") or pe_record.get("殖利率(%)") or ""
+
+            if pe_str and pe_str != "":
+                fund_conf += 10.0
+            if pb_str and pb_str != "":
+                fund_conf += 10.0
+            if div_str and div_str != "":
+                fund_conf += 5.0
+
+            if all(s and s != "" for s in [pe_str, pb_str]):
+                fund_factors.append("full_pe_data")
+            else:
+                fund_factors.append("partial_pe_data")
+        else:
+            fund_conf -= 20.0
+            fund_factors.append("no_pe_data")
+    else:
+        fund_conf -= 20.0
+        fund_factors.append("no_pe_index")
+
+    # Company info freshness — if available, assume recent financials
+    if company_info:
+        fund_conf += 15.0
+        fund_factors.append("company_info_available")
+    else:
+        fund_conf -= 10.0
+        fund_factors.append("no_company_info")
+
+    confidence["profitability"] = {
+        "confidence": round(max(0.0, min(100.0, fund_conf)), 1),
+        "factors": fund_factors,
+    }
+    confidence["valuation"] = {
+        "confidence": round(max(0.0, min(100.0, fund_conf - 5.0)), 1),
+        "factors": list(fund_factors),
+    }
+
+    # --- Momentum-specific regime confidence ---
+    # Already built as "momentum" above, but adjust for regime
+    mom_conf = confidence["momentum"]["confidence"]
+    mom_factors = list(confidence["momentum"]["factors"])
+
+    if regime in ("stress", "crisis", "black_swan"):
+        mom_conf -= 20.0
+        mom_factors.append(f"low_confidence_regime:{regime}")
+    elif regime == "caution":
+        mom_conf -= 5.0
+        mom_factors.append("caution_regime")
+    elif regime == "normal":
+        mom_conf += 5.0
+        mom_factors.append("normal_regime")
+
+    confidence["momentum"] = {
+        "confidence": round(max(0.0, min(100.0, mom_conf)), 1),
+        "factors": mom_factors,
+    }
+
+    # --- Volume / Flow confidence ---
+    flow_factors = []
+    flow_conf = 50.0
+
+    # Check if institutional flow data is available (primary source)
+    has_inst_flow = False
+    if flow_data is not None and isinstance(flow_data, list) and len(flow_data) > 0:
+        has_inst_flow = True
+        flow_conf += 20.0
+        flow_factors.append("inst_flow_available")
+
+    # Check if margin data is available (fallback source)
+    if margin_index is not None:
+        records = margin_index.get(stock_code, [])
+        if records:
+            flow_conf += 10.0
+            flow_factors.append("margin_data_available")
+        else:
+            flow_conf -= 5.0
+            flow_factors.append("no_margin_data")
+
+    if not has_inst_flow and margin_index is None:
+        flow_conf -= 20.0
+        flow_factors.append("no_flow_or_margin_data")
+
+    # ADV borderline check — lower confidence if ADV is near threshold
+    if price_history and stock_code in price_history:
+        history = price_history[stock_code]
+        if len(history) >= 20:
+            daily_values = []
+            for h in history[-20:]:
+                price = h.get("adj_close") or h.get("close") or 0
+                vol = h.get("adj_volume") or h.get("volume") or 0
+                if price > 0 and vol > 0:
+                    daily_values.append(price * vol)
+            if daily_values:
+                adv = sum(daily_values) / len(daily_values)
+                if adv < 100_000_000:  # NT$100M borderline
+                    flow_conf -= 15.0
+                    flow_factors.append("borderline_adv")
+                else:
+                    flow_conf += 10.0
+                    flow_factors.append("healthy_adv")
+
+    confidence["flow"] = {
+        "confidence": round(max(0.0, min(100.0, flow_conf)), 1),
+        "factors": flow_factors,
+    }
+
+    # --- Revenue confidence ---
+    rev_factors = []
+    rev_conf = 50.0
+
+    if revenue_index is not None:
+        rev_record = revenue_index.get(stock_code)
+        if rev_record:
+            rev_conf += 20.0
+            # Check YoY data consistency
+            yoy_str = rev_record.get("營業收入-去年同月增減(%)") or rev_record.get("rev_yoy") or ""
+            mom_str = rev_record.get("營業收入-上月比較增減(%)") or rev_record.get("rev_mom") or ""
+            if yoy_str and yoy_str != "":
+                rev_conf += 10.0
+                rev_factors.append("yoy_available")
+            if mom_str and mom_str != "":
+                rev_conf += 5.0
+                rev_factors.append("mom_available")
+            # Check for contradictory signals (YoY up but MoM down sharply, or vice versa)
+            try:
+                yoy_val = float(yoy_str) if yoy_str else 0
+                mom_val = float(mom_str) if mom_str else 0
+                if (yoy_val > 10 and mom_val < -10) or (yoy_val < -10 and mom_val > 10):
+                    rev_conf -= 10.0
+                    rev_factors.append("contradictory_yoy_mom")
+                else:
+                    rev_factors.append("consistent_yoy_mom")
+            except (ValueError, TypeError):
+                rev_factors.append("unparseable_revenue")
+        else:
+            rev_conf -= 25.0
+            rev_factors.append("no_revenue_data")
+    else:
+        rev_conf -= 25.0
+        rev_factors.append("no_revenue_index")
+
+    confidence["revenue"] = {
+        "confidence": round(max(0.0, min(100.0, rev_conf)), 1),
+        "factors": rev_factors,
+    }
+
+    return confidence
+
+
 def _validate_candidates(candidates, verbose=True):
     """Phase 9: Validate Stage 1 candidates via Pydantic schema.
     
@@ -1157,6 +1383,15 @@ def run_stage1(date_str=None, verbose=False):
         # Phase 27: Compute signal strength (continuous conviction metric)
         signal_strength = compute_signal_strength(scores, round(composite, 1), stage1_weights)
 
+        # Phase 27: Compute per-dimension confidence scores
+        signal_confidence = compute_signal_confidence(
+            code, scores, price_history=price_history,
+            company_info=company_info, pe_index=pe_index,
+            flow_data=flow_data, margin_data=margin_data,
+            regime=regime, margin_index=margin_index,
+            daily_index=daily_index, revenue_index=revenue_index,
+        )
+
         result = {
             "code": code,
             "name": name,
@@ -1164,6 +1399,7 @@ def run_stage1(date_str=None, verbose=False):
             "composite_score": round(composite, 1),
             "score_breakdown": scores,
             "signal_strength": signal_strength,
+            "signal_confidence": signal_confidence,
             "pass": composite >= thresholds["stage1"]["pass_threshold"]
         }
         
