@@ -754,6 +754,26 @@ def run_stage2(date_str=None, verbose=False):
     logger.info("Regime-adjusted Stage 2 min score: %d (%s)",
                 effective_s2_min, adjusted_s2['regime_note'])
 
+    # Phase 34: Fetch cross-asset context for composite score adjustment
+    cross_asset_signal = 0.0
+    cross_asset_details = {}
+    try:
+        from market_context import get_cross_asset_signal as _get_cross_asset_signal
+        from market_context import fetch_cross_assets as _fetch_cross_assets
+        cross_assets = _fetch_cross_assets(date_str)
+        cross_asset_signal, cross_asset_details = _get_cross_asset_signal(
+            cross_assets=cross_assets, stage1_summary=stage1_results.get("summary")
+        )
+        logger.info("Phase 34: Cross-asset signal: %+.4f", cross_asset_signal)
+    except Exception as e:
+        logger.debug("Phase 34: cross-asset signal fetch failed (using neutral 0): %s", e)
+        cross_asset_signal = 0.0
+        cross_asset_details = {"總訊號": 0.0, "來源": "unavailable"}
+    # Scale signal from [-0.2, +0.2] to [-3, +3] points
+    cross_asset_adjustment = round(cross_asset_signal * 15.0, 1)
+    cross_asset_adjustment = max(-3.0, min(3.0, cross_asset_adjustment))
+    logger.info("Phase 34: Cross-asset composite score adjustment: %+.1f points", cross_asset_adjustment)
+
     deep_results = []
     disqualified = []
     
@@ -934,7 +954,8 @@ def run_stage2(date_str=None, verbose=False):
                 "volume_profile": vol_profile,
                 "intraday_pattern": intraday_pattern,
             },
-            "combined_score": round((stage1_score * 0.6 + fundamental_score * 0.4), 1)
+            "cross_asset_adjustment": cross_asset_adjustment,  # Phase 34
+            "combined_score": round((stage1_score * 0.6 + fundamental_score * 0.4) + cross_asset_adjustment, 1)
         }
         
         if fundamental_score >= effective_s2_min:
@@ -962,6 +983,11 @@ def run_stage2(date_str=None, verbose=False):
         "timestamp": datetime.now().isoformat(),
         "regime": regime,
         "regime_adjusted_thresholds": adjusted_s2,
+        "cross_asset_context": {  # Phase 34
+            "signal": cross_asset_signal,
+            "adjustment_points": cross_asset_adjustment,
+            "details": cross_asset_details,
+        },
         "candidates": deep_results,
         "disqualified": disqualified,
         "summary": {
