@@ -423,3 +423,59 @@ Total pipeline: 10/10 stages passed in 39.7s
 - Signal grades correctly mapped (80.5→B, 74.7→C with emoji colors)
 - Sector names properly translated (半導體, 電子/電機, etc.)
 - HTML report has proper meta tags and responsive CSS
+
+---
+
+## Phase 33 Complete (2026-05-16) — Comprehensive Test Suite Expansion
+**Test count: ~119 → 318 (+199 new tests)**
+
+### New Test Files Created
+- **tests/test_report_generator.py** (619 lines, 57 tests) — Phase 32 coverage
+  - format_signal_grade(): score→grade mapping (A/B/C/D/E with emoji), edge cases at boundaries (89.5, 79.9), negative/None/string inputs
+  - format_regime_badge(): all 5 regimes map to correct Traditional Chinese, case-insensitive, unknown fallback
+  - generate_daily_report(): empty data dir, missing stage1/stage2 files, partial data, ROC date in output
+  - HTML report generation: valid HTML structure, lang="zh-TW", inline CSS, color-coded rows, collapsible sections
+  - Helper functions: iso_to_roc_display(), format_ntd(), format_pct(), get_sector_tc(), safe_load_json()
+
+- **tests/test_news_sentiment.py** (+200 lines, +17 tests → 57 total) — Phase 31 edge cases
+  - Mixed positive/negative keywords in same article (loss aversion bias verification)
+  - Empty/None news list handling with graceful fallbacks
+  - Cache TTL boundary conditions (just expired vs just valid)
+
+- **tests/test_microstructure.py** (589 lines, 49 tests) — Phase 30 coverage
+  - compute_volume_profile(): single bar data, uniform prices, extreme outliers, empty history
+  - classify_intraday_pattern(): all 9 candlestick types with synthetic OHLCV data
+  - detect_volume_anomalies(): low-volume stocks (<20 samples), zero volume days, increasing/decreasing trends
+  - compute_gap_fill_probability(): no historical gaps, all gaps filled, mixed fill rates
+
+- **tests/test_rebalancing.py** (478 lines, 26 tests) — Phase 28 coverage
+  - optimize_positions(): Kelly fraction with extreme signal strengths (0%, 100%), sector cap enforcement, regime multiplier effects, TWD allocation calculation
+  - compute_sector_rotation(): single-sector portfolio, equal momentum across sectors, rolling window parameter, date filtering
+  - check_correlation_risk(): perfectly correlated holdings (corr=1.0), zero-correlation case, position adjustment on high correlation, effective portfolio beta
+
+- **tests/test_alerts.py** (552 lines, 49 tests) — Phase 29 coverage
+  - Deduplication: same alert within cooldown, different alerts with overlapping hashes, TTL expiry
+  - Escalation rules: info→digest, warning→immediate, critical→always bypasses all filters
+  - Digest mode: batching multiple info alerts, digest flush timing, empty digest suppression
+
+### Test Suite Results
+```
+318 passed in 7.17s (full suite)
+Pipeline: 10/10 stages passed in 36.0s
+All tests use inline synthetic data — zero API calls
+Taiwan market conventions verified: TWSE codes (2330, 2454), Traditional Chinese, lang="zh-TW"
+```
+
+### Commits
+- `2ce8940` Phase 33: Add test_report_generator.py — 57 tests for report_generator module
+- `87d6350` Phase 33: Expand test_news_sentiment.py — +17 edge case tests (now 57 total)
+- `73c15b8` Phase 33: Add test_microstructure.py — 49 tests for Phase 30 microstructure analysis
+- `2be8212` Phase 33: Add test_rebalancing.py — 26 tests for Phase 28 portfolio rebalancing
+- `cc9653a` Phase 33: Add test_alerts.py — 49 tests for Phase 29 alert system
+
+### Review Notes
+- Test patterns follow existing conftest.py fixtures and test_core.py conventions
+- All edge cases properly handled (None, empty dicts, boundary values)
+- Taiwan stock codes used throughout (2330=TSMC, 2454=MediaTek)
+- Traditional Chinese regime names verified in report_generator tests
+- HTML lang="zh-TW" attribute tested explicitly
