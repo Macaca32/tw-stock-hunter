@@ -1,6 +1,6 @@
 {
-  "current_phase": 32,
-  "phase_name": "TBD — next phase after news sentiment integration",
+  "current_phase": 33,
+  "phase_name": "Daily report generation — produce human-readable Markdown/HTML summary combining market regime, Stage 1 pass/watchlist candidates with signal strength grades, Stage 2 deep-dive details, portfolio status (positions, PnL), sector rotation signals, and alert digest. Output to reports/YYYY-MM-DD.md. Include key metrics table and color-coded sentiment indicators.",
   "started_at": "2026-05-16T14:00:00+08:00",
   "completed_phases": [
     {
@@ -241,6 +241,14 @@
       "completed_at": "2026-05-16T19:00:00+08:00",
       "summary": "Created core/news_sentiment.py with news fetching from UDN/CBN, Traditional Chinese keyword sentiment classification (19 positive, 20 negative keywords), loss aversion bias (1.3x negative weight), recency weighting (7-day linear decay), and Stage 2 integration via check_news_sentiment(). Sentiment maps to score (+0.5→90, neutral→60, -0.5→30). Cache in data/news_cache.json with 4h TTL. Added news_sentiment:0.11 weight to weights.json (v5.0). Red flag: score<35 disqualifies from Stage 2. Graceful fallback if fetch fails. 39 new tests, 119 total passing.",
       "commit": "09d5d6c, c4e0eb3, 1f57040, 3b23456"
+    },
+    {
+      "phase": 32,
+      "name": "Daily report generation — Markdown/HTML daily reports combining all pipeline outputs",
+      "started_at": "2026-05-16T20:00:00+08:00",
+      "completed_at": "2026-05-16T20:49:00+08:00",
+      "summary": "Created core/report_generator.py (1478 lines) with generate_daily_report() producing comprehensive Markdown reports at reports/YYYY-MM-DD.md, and generate_html_report() for styled HTML variants. Features: ROC date format (民國XXXX年XX月XX日), market regime badges in Traditional Chinese (常態/警戒/壓力/危機/黑天鵝), signal grade A-E with emoji coloring (🟢A/B green, 🟡C/D yellow, 🔴E red), screening results tables, deep-dive details for pass candidates, portfolio status (positions/PnL), sector rotation signals with Taiwan market terminology, alert digest. Backward compatible — skips gracefully if upstream data missing. Integrated as Stage 10 in run_pipeline.py after all other stages. Pipeline test: 10/10 stages passed in 39.7s.",
+      "commit": "92e3cd3, d33b944"
     }
   ],
   "notes": "Phase 23 done. SQLite data layer provides efficient historical queries and cumulative tracking on top of existing JSON data files.",

@@ -387,3 +387,39 @@ Modified files: `core/stage1_screen.py` (+298 lines), `core/stage2_deep.py` (+37
 ### Dry Run Test Results:
 - test_news_sentiment.py: 39/39 PASSED ✅
 - Full suite: 119 tests passing ✅
+
+---
+
+## Phase 32: Daily Report Generation — COMPLETED (2026-05-16)
+
+### Implementation
+- **core/report_generator.py** (1478 lines) — Full daily report generation module
+  - `generate_daily_report(date_str, output_dir)` — reads Stage 1/2 results, portfolio status, sector rotation, alerts from JSON files and assembles comprehensive Markdown report at `{output_dir}/{date}.md` with ROC date format (民國XXXX年XX月XX日), market regime badge, screening results table (stock code, name, composite score, signal grade A-E), deep-dive details for pass candidates, portfolio status (positions, PnL, sector allocation), and alert digest
+  - `format_signal_grade(score)` — maps score to letter grade: 90+=A(🟢), 80+=B(🟢), 70+=C(🟡), 60+=D(🟡), <60=E(🔴)
+  - `format_regime_badge(regime)` — NORMAL→常態, CAUTION→警戒, STRESS→壓力, CRISIS→危機, BLACK_SWAN→黑天鵝 (with emoji circles)
+  - `_iso_to_roc_display()` — ISO date to ROC format conversion
+  - `generate_html_report(date_str)` — HTML variant with inline CSS, color-coded rows by grade (green/yellow/red), collapsible deep-dive sections, responsive design with zh-TW font stack
+- **run_pipeline.py** — Added report_generator as Stage 10 after all other stages complete
+- All output Traditional Chinese with Taiwan market terminology
+- Backward compatible — skips gracefully if upstream data missing
+
+### Pipeline Test Results
+```
+Stage 10: report_generator ✓ (0.3s)
+Report: MD ✓ | HTML ✓
+Total pipeline: 10/10 stages passed in 39.7s
+```
+
+### Generated Reports Verified
+- `reports/2026-05-16.md` (2,186 bytes) — Full Markdown report with ROC date "民國115年05月16日"
+- `reports/2026-05-16.html` (7,900 bytes) — Styled HTML with lang="zh-TW", Noto Sans TC font
+
+### Commits
+- `92e3cd3` Phase 32: Add core/report_generator.py — daily Markdown/HTML report generator
+- `d33b944` Phase 32: Integrate report_generator as Stage 10 in run_pipeline.py
+
+### Review Notes
+- Import pattern matches existing convention (inline imports per stage)
+- Signal grades correctly mapped (80.5→B, 74.7→C with emoji colors)
+- Sector names properly translated (半導體, 電子/電機, etc.)
+- HTML report has proper meta tags and responsive CSS
