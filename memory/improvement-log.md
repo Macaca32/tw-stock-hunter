@@ -219,3 +219,37 @@ All fixes approved. Key Taiwan-market correctness verified:
 ```
 
 ### Dry Run Test: PASSED ✅ (all 80 tests)
+
+## Phase 28 Complete (2026-05-16) — Portfolio Rebalancing Engine
+**Commits:** `42ad5dd`, `4ec4cbe`, `6506f46`
+
+### Enhancement #1: Position Sizing Optimization ✅
+- New method: `optimize_positions(candidates, portfolio_value=None, regime_mult=1.0)` — Kelly-inspired sizing based on signal strength from Phase 27
+- Formula: position_size = base_size * (signal_strength / 50), capped at 3x and floored at 0.5x
+- Sector diversification enforced: max 15% of portfolio per sector to avoid concentration risk
+- Regime-aware scaling: effective_max = int(max_positions * regime_mult) — crisis regimes reduce position count proportionally
+- Backward compatible fallback when signal_strength dict not available (uses combined_score) ✅
+
+### Enhancement #2: Sector Rotation Signals ✅
+- New method: `compute_sector_rotation(date_str=None, rolling_window=5)` — analyzes sector momentum over rolling window
+- Generates overweight/underweight/neutral signals based on current vs rolling average deviation (>1 std = signal)
+- Date-aware to avoid look-ahead bias (only uses data up to date_str) ✅
+
+### Enhancement #3: Correlation-Based Risk Budgeting ✅
+- New method: `check_correlation_risk(positions, price_history, lookback_days=20)` — pairwise Pearson correlation analysis
+- Reduces smaller position by 50% when two holdings have correlation >0.85 to limit concentration risk
+- Reports effective portfolio beta as weighted-average relative to equal-weight benchmark ✅
+
+### Taiwan-market Correctness:
+- Sector classification uses existing `_get_sector()` — properly maps TWSE sub-sectors ✅
+- Volume/price lookups use None-safe `or` chain pattern from Phase 25 fix ✅
+- ROC date handling preserved for ex-dividend checks ✅
+
+### Pipeline Test Results:
+```
+✓ PIPELINE COMPLETE — 9/9 stages successful (36.1s)
+  ✓ stage1_screen: 1.9s (2 passed, 39 watchlist, 1318 rejected)
+    Note: Low pass count due to CRISIS regime thresholds (pass=80)
+```
+
+### Dry Run Test: PASSED ✅ (all 80 tests)
