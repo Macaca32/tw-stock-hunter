@@ -11,6 +11,7 @@ Features:
 - Phase 20: Actual message delivery via Telegram Bot API
 - Phase 29: Alert Deduplication - suppress duplicates within configurable cooldown
 - Phase 29: Escalation Rules - severity levels (info/warning/critical) with routing
+- Phase 29: Daily Digest Mode - batch info alerts into morning/evening digests
 """
 
 import hashlib
@@ -18,7 +19,7 @@ import json
 import logging
 import os
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -54,6 +55,9 @@ class TelegramAlerts:
         # Phase 29: Alert deduplication - track recent alerts in history file
         self.alert_history_file = self.data_dir / "alert_history.json"
         self.dedup_cooldown_hours = dedup_cooldown_hours  # Default 4 hours
+
+        # Phase 29: Daily digest - pending info-level alerts
+        self.pending_digest_file = self.data_dir / "pending_digest.json"
 
         # Phase 20: Telegram Bot API credentials from environment
         self.bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -109,12 +113,12 @@ class TelegramAlerts:
         Respects rate limiting via should_alert(). Records the alert on
         success so cooldown logic works correctly.
 
-        Phase 29: Now routes through the escalation system. Info-level
-        alerts are handled silently (future digest). Warning/critical go
-        immediately. Backward compatible - existing callers using
-        alert_type="daily" still work.
+        Phase 29: Now routes through the escalation and digest system.
+        Info-level alerts are batched into the daily digest. Warning/critical
+        go immediately. Backward compatible - existing callers using
+        alert_type="daily" still work (daily -> info -> digest).
 
-        Returns True if the alert was sent (or queued), False otherwise.
+        Returns True if the alert was sent (or queued for digest), False otherwise.
         """
         severity = self._get_severity(alert_type)
 
@@ -131,16 +135,14 @@ class TelegramAlerts:
 
         # Phase 29: Route based on severity
         if severity == "info":
-            # Info alerts are sent normally but tagged as info severity.
-            # Phase 29 digest mode (next commit) will batch these instead.
-            if not self.should_alert(alert_type):
-                return False
-            success = self.send_message(message)
-            if success:
-                self.record_alert(alert_type)
-                self._record_alert_history(alert_type, stock_code, message_hash)
-                self.update_last_alert_with_regime()
-            return success
+            # Info alerts go to digest - not sent immediately
+            self._add_to_pending_digest(alert_type, stock_code, message)
+            # Still record for rate-limiting / dedup purposes
+            self.record_alert(alert_type)
+            self._record_alert_history(alert_type, stock_code, message_hash)
+            self.update_last_alert_with_regime()
+            logger.info("Info alert queued for digest: type=%s", alert_type)
+            return True  # Queued successfully
 
         elif severity == "warning":
             # Warning alerts: sent immediately, bypass normal rate limiting
@@ -364,6 +366,150 @@ class TelegramAlerts:
         )
 
     # ================================================================== #
+    #  Phase 29: Daily Digest Mode
+    # ================================================================== #
+
+    def _load_pending_digest(self) -> List[Dict]:
+        """Load pending info-level alerts from data/pending_digest.json."""
+        if not self.pending_digest_file.exists():
+            return []
+        try:
+            with open(self.pending_digest_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            return []
+
+    def _save_pending_digest(self, pending: List[Dict]):
+        """Persist pending digest alerts."""
+        self.pending_digest_file.parent.mkdir(exist_ok=True)
+        with open(self.pending_digest_file, 'w', encoding='utf-8') as f:
+            json.dump(pending, f, ensure_ascii=False, indent=2)
+
+    def _add_to_pending_digest(self, alert_type: str, stock_code: str,
+                               message: str):
+        """Add an info-level alert to the pending digest queue.
+
+        Info alerts are not sent immediately. They are accumulated in
+        data/pending_digest.json and flushed at digest times
+        (morning 08:00 and evening 17:00 Taipei time).
+        """
+        pending = self._load_pending_digest()
+        entry = {
+            "timestamp": datetime.now().isoformat(),
+            "type": alert_type,
+            "stock_code": stock_code,
+            "message": message,
+        }
+        pending.append(entry)
+        self._save_pending_digest(pending)
+
+    def should_send_digest(self) -> Optional[str]:
+        """Check if it's time to send a digest (morning or evening).
+
+        Morning digest: 08:00 Taipei time (UTC+8)
+        Evening digest: 17:00 Taipei time (UTC+8)
+
+        Returns:
+            'morning', 'evening', or None if not a digest time.
+            Uses a 10-minute window (HH:00 to HH:10) to account for
+            scheduling jitter.
+        """
+        taipei_tz = timezone(timedelta(hours=8))
+        now_taipei = datetime.now(taipei_tz)
+        hour = now_taipei.hour
+        minute = now_taipei.minute
+
+        if hour == 8 and minute < 10:
+            return "morning"
+        elif hour == 17 and minute < 10:
+            return "evening"
+        return None
+
+    def flush_digest(self, digest_type: str = "morning") -> bool:
+        """Flush pending info alerts as a formatted digest message.
+
+        Args:
+            digest_type: 'morning' or 'evening' - affects header.
+
+        Returns:
+            True if the digest was sent successfully or there was nothing
+            to send, False on send failure.
+        """
+        pending = self._load_pending_digest()
+        if not pending:
+            logger.info("No pending digest alerts to flush")
+            return True
+
+        # Build the digest message
+        lines = self._format_digest_header(digest_type, len(pending))
+
+        # Group pending alerts by type for cleaner presentation
+        by_type: Dict[str, List[Dict]] = {}
+        for entry in pending:
+            t = entry.get("type", "unknown")
+            by_type.setdefault(t, []).append(entry)
+
+        for alert_type, entries in by_type.items():
+            lines.append(f"")
+            lines.append(f"-- {alert_type} ({len(entries)} items) --")
+            for entry in entries:
+                ts = entry.get("timestamp", "")[:16]  # Trim seconds
+                code = entry.get("stock_code", "")
+                code_label = f" [{code}]" if code else ""
+                # Show first 80 chars of message to keep digest readable
+                msg_preview = entry.get("message", "")[:80]
+                if len(entry.get("message", "")) > 80:
+                    msg_preview += "..."
+                lines.append(f"  * {ts}{code_label}: {msg_preview}")
+
+        lines.append(f"")
+        lines.append(f"-- Total: {len(pending)} alerts | {digest_type} digest --")
+
+        message = "\n".join(lines)
+        success = self.send_message(message)
+
+        if success:
+            # Clear the pending digest
+            self._save_pending_digest([])
+            logger.info("Digest flushed: type=%s alerts=%d", digest_type, len(pending))
+        return success
+
+    def _format_digest_header(self, digest_type: str, count: int) -> List[str]:
+        """Build the header lines for a digest message.
+
+        Args:
+            digest_type: 'morning' or 'evening'
+            count: Number of pending alerts in the digest
+        """
+        taipei_tz = timezone(timedelta(hours=8))
+        now_taipei = datetime.now(taipei_tz)
+        date_str = now_taipei.strftime("%Y-%m-%d")
+
+        if digest_type == "morning":
+            emoji = "\U0001f305"  # sunrise
+            label = "Morning Digest"
+        else:
+            emoji = "\U0001f306"  # sunset
+            label = "Evening Digest"
+
+        lines = [
+            f"{emoji} TW Stock Hunter {label}",
+            f"  {date_str}",
+            f"  Pending alerts: {count}",
+        ]
+        return lines
+
+    def check_and_flush_digest(self) -> bool:
+        """Convenience method: check if it's digest time and flush if so.
+
+        Returns True if a digest was sent, False otherwise.
+        """
+        digest_type = self.should_send_digest()
+        if digest_type is None:
+            return False
+        return self.flush_digest(digest_type)
+
+    # ================================================================== #
     #  Formatting methods (unchanged - backward compatible)
     # ================================================================== #
 
@@ -514,7 +660,7 @@ class TelegramAlerts:
         """Send a typed alert through the full Phase 29 pipeline.
 
         This is the recommended entry point for programmatic alert sending.
-        It applies deduplication and severity escalation.
+        It applies deduplication, severity escalation, and digest routing.
 
         Args:
             alert_type: One of the known types (new_entry, regime_change,
@@ -524,7 +670,7 @@ class TelegramAlerts:
             date_str: Optional date string (defaults to today)
 
         Returns:
-            True if alert was sent, False if suppressed or failed.
+            True if alert was sent or queued, False if suppressed or failed.
         """
         severity = self._get_severity(alert_type)
         message_hash = self._compute_message_hash(message)
@@ -536,12 +682,10 @@ class TelegramAlerts:
 
         # Route by severity
         if severity == "info":
-            if not self.should_alert(alert_type):
-                return False
-            success = self.send_message(message)
-            if success:
-                self._record_alert_history(alert_type, stock_code, message_hash)
-            return success
+            self._add_to_pending_digest(alert_type, stock_code, message)
+            self._record_alert_history(alert_type, stock_code, message_hash)
+            logger.info("Info alert queued for digest: type=%s stock=%s", alert_type, stock_code)
+            return True
 
         elif severity == "warning":
             success = self.send_message(message)
@@ -565,9 +709,22 @@ def main():
     parser.add_argument("--date", type=str, help="Date to alert (YYYY-MM-DD)")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
     parser.add_argument("--dry-run", action="store_true", help="Generate alert but don't send")
+    parser.add_argument("--flush-digest", action="store=True",
+                        help="Flush pending info alerts as a digest")
+    parser.add_argument("--digest-type", choices=["morning", "evening"],
+                        default="morning", help="Digest type for --flush-digest")
     args = parser.parse_args()
 
     alerts = TelegramAlerts()
+
+    if args.flush_digest:
+        sent = alerts.flush_digest(args.digest_type)
+        if sent:
+            print(f"✅ {args.digest_type.capitalize()} digest sent")
+        else:
+            print(f"⚠ {args.digest_type.capitalize()} digest not sent")
+        return
+
     message = alerts.generate_alert(date_str=args.date)
 
     if message:
@@ -580,7 +737,7 @@ def main():
         else:
             sent = alerts.deliver_alert(date_str=args.date)
             if sent:
-                print("✅ Alert delivered via Telegram")
+                print("✅ Alert delivered via Telegram (or queued for digest)")
             else:
                 print("⚠ Alert not delivered (rate-limited, deduplicated, holiday, or missing credentials)")
     else:
