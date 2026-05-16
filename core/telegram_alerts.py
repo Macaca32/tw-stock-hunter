@@ -10,6 +10,7 @@ Features:
 - Rate limiting to avoid spam
 - Phase 20: Actual message delivery via Telegram Bot API
 - Phase 29: Alert Deduplication - suppress duplicates within configurable cooldown
+- Phase 29: Escalation Rules - severity levels (info/warning/critical) with routing
 """
 
 import hashlib
@@ -22,6 +23,25 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+# -- Phase 29: Severity mapping for alert types --
+# info=1: goes to daily digest only (new_entry, take_profit)
+# warning=2: sent immediately, batched (regime_change, signal_detected)
+# critical=3: sent immediately with special formatting (stop_loss_hit)
+SEVERITY_MAP = {
+    "new_entry": "info",
+    "take_profit": "info",
+    "regime_change": "warning",
+    "signal_detected": "warning",
+    "stop_loss_hit": "critical",
+    # Legacy alert types default to info severity
+    "daily": "info",
+    "crisis": "warning",
+    "black_swan": "warning",
+    "heartbeat": "info",
+}
+
+SEVERITY_LEVEL = {"info": 1, "warning": 2, "critical": 3}
 
 
 class TelegramAlerts:
@@ -89,14 +109,14 @@ class TelegramAlerts:
         Respects rate limiting via should_alert(). Records the alert on
         success so cooldown logic works correctly.
 
-        Phase 29: Now checks deduplication before sending. If a duplicate
-        is found within the cooldown window, the alert is suppressed.
-        Backward compatible - existing callers are unaffected.
+        Phase 29: Now routes through the escalation system. Info-level
+        alerts are handled silently (future digest). Warning/critical go
+        immediately. Backward compatible - existing callers using
+        alert_type="daily" still work.
 
-        Returns True if the alert was sent successfully, False otherwise.
+        Returns True if the alert was sent (or queued), False otherwise.
         """
-        if not self.should_alert(alert_type):
-            return False
+        severity = self._get_severity(alert_type)
 
         message = self.generate_alert(date_str)
         if not message:
@@ -109,10 +129,44 @@ class TelegramAlerts:
             logger.info("Alert deduplicated: type=%s stock=%s", alert_type, stock_code)
             return False
 
+        # Phase 29: Route based on severity
+        if severity == "info":
+            # Info alerts are sent normally but tagged as info severity.
+            # Phase 29 digest mode (next commit) will batch these instead.
+            if not self.should_alert(alert_type):
+                return False
+            success = self.send_message(message)
+            if success:
+                self.record_alert(alert_type)
+                self._record_alert_history(alert_type, stock_code, message_hash)
+                self.update_last_alert_with_regime()
+            return success
+
+        elif severity == "warning":
+            # Warning alerts: sent immediately, bypass normal rate limiting
+            success = self.send_message(message)
+            if success:
+                self.record_alert(alert_type)
+                self._record_alert_history(alert_type, stock_code, message_hash)
+                self.update_last_alert_with_regime()
+            return success
+
+        elif severity == "critical":
+            # Critical alerts: always sent immediately with special formatting
+            formatted = self._format_critical_alert(message, alert_type, stock_code)
+            success = self.send_message(formatted)
+            if success:
+                self.record_alert(alert_type)
+                self._record_alert_history(alert_type, stock_code, message_hash)
+                self.update_last_alert_with_regime()
+            return success
+
+        # Fallback (should not reach here)
+        if not self.should_alert(alert_type):
+            return False
         success = self.send_message(message)
         if success:
             self.record_alert(alert_type)
-            self._record_alert_history(alert_type, stock_code, message_hash)
             self.update_last_alert_with_regime()
         return success
 
@@ -124,7 +178,7 @@ class TelegramAlerts:
         Critical alerts and heartbeat checks ALWAYS bypass suppression.
         """
         # -- Holiday suppression --
-        NEVER_SUPPRESS = {"regime_change", "crisis", "black_swan", "heartbeat"}
+        NEVER_SUPPRESS = {"regime_change", "crisis", "black_swan", "heartbeat", "stop_loss_hit"}
 
         if alert_type not in NEVER_SUPPRESS:
             today = date.today().isoformat()  # ISO string for is_trading_day()
@@ -257,6 +311,57 @@ class TelegramAlerts:
         # Try to find a 4-digit stock code pattern in the message
         match = re.search(r'\b(\d{4})\b', message)
         return match.group(1) if match else ""
+
+    # ================================================================== #
+    #  Phase 29: Escalation Rules
+    # ================================================================== #
+
+    def _get_severity(self, alert_type: str) -> str:
+        """Get the severity level for an alert type.
+
+        Maps alert types to severity: info, warning, or critical.
+        Unknown alert types default to 'info' for safety (won't spam).
+
+        Severity routing:
+        - info (1): daily digest only (new_entry, take_profit, daily)
+        - warning (2): sent immediately, batched (regime_change, signal_detected)
+        - critical (3): sent immediately with special formatting (stop_loss_hit)
+        """
+        return SEVERITY_MAP.get(alert_type, "info")
+
+    def get_severity_level(self, alert_type: str) -> int:
+        """Get numeric severity level for an alert type.
+
+        Returns:
+            1 for info, 2 for warning, 3 for critical. Default is 1.
+        """
+        severity = self._get_severity(alert_type)
+        return SEVERITY_LEVEL.get(severity, 1)
+
+    def _format_critical_alert(self, message: str, alert_type: str,
+                               stock_code: str = "") -> str:
+        """Format a critical-level alert with special urgency markers.
+
+        Critical alerts get:
+        - Double red circle emoji header
+        - UPPERCASE severity tag
+        - Timestamp for audit trail
+        - Blank line separators for visibility
+        """
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        header = "\U0001f534\U0001f534 CRITICAL ALERT"
+        if stock_code:
+            header += f" - {stock_code}"
+        header += f" [{alert_type}]"
+
+        return (
+            f"{header}\n"
+            f"  {now_str}\n"
+            f"\n"
+            f"{message}\n"
+            f"\n"
+            f"-- End of Critical Alert --"
+        )
 
     # ================================================================== #
     #  Formatting methods (unchanged - backward compatible)
@@ -398,6 +503,60 @@ class TelegramAlerts:
                     "timestamp": datetime.now().isoformat(),
                     "regime": regime.get("regime", "unknown")
                 }, f)
+
+    # ================================================================== #
+    #  Phase 29: Convenience method for sending typed alerts
+    # ================================================================== #
+
+    def send_typed_alert(self, alert_type: str, message: str,
+                         stock_code: str = "",
+                         date_str: str = None) -> bool:
+        """Send a typed alert through the full Phase 29 pipeline.
+
+        This is the recommended entry point for programmatic alert sending.
+        It applies deduplication and severity escalation.
+
+        Args:
+            alert_type: One of the known types (new_entry, regime_change,
+                        stop_loss_hit, take_profit, signal_detected, etc.)
+            message: The alert message body
+            stock_code: Optional stock code for dedup and formatting
+            date_str: Optional date string (defaults to today)
+
+        Returns:
+            True if alert was sent, False if suppressed or failed.
+        """
+        severity = self._get_severity(alert_type)
+        message_hash = self._compute_message_hash(message)
+
+        # Deduplication check
+        if self._is_duplicate(alert_type, stock_code, message_hash):
+            logger.info("Typed alert deduplicated: type=%s stock=%s", alert_type, stock_code)
+            return False
+
+        # Route by severity
+        if severity == "info":
+            if not self.should_alert(alert_type):
+                return False
+            success = self.send_message(message)
+            if success:
+                self._record_alert_history(alert_type, stock_code, message_hash)
+            return success
+
+        elif severity == "warning":
+            success = self.send_message(message)
+            if success:
+                self._record_alert_history(alert_type, stock_code, message_hash)
+            return success
+
+        elif severity == "critical":
+            formatted = self._format_critical_alert(message, alert_type, stock_code)
+            success = self.send_message(formatted)
+            if success:
+                self._record_alert_history(alert_type, stock_code, message_hash)
+            return success
+
+        return False
 
 
 def main():
