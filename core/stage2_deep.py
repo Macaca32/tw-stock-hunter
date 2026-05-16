@@ -304,6 +304,324 @@ def check_penalty_risk(stock_code, penalty_data, penalty_index=None):
         return None
 
 
+def compute_volume_profile(price_history, stock_code, current_price=None):
+    """Phase 30: Approximate Volume Point of Control (POC) and Value Area.
+
+    Bins adjusted close prices into NT$10 intervals over the available
+    historical window, computes volume per bin, and identifies:
+      - POC: price bin with the highest total volume
+      - Value Area: contiguous bins around POC that contain 67% of total volume
+
+    Uses adjusted prices and volumes (Phase 2 corporate-action adjustments)
+    so ex-dividend gaps do not distort the profile.
+
+    Returns dict with:
+        poc: float — Volume Point of Control price (midpoint of highest-volume bin)
+        value_area_high: float — Upper bound of value area
+        value_area_low: float — Lower bound of value area
+        sr_score: float 0-100 — Support/resistance quality score
+            (stocks trading near POC → stronger signals)
+        bin_size: float — The price interval used for binning
+        total_bins: int — Number of bins with non-zero volume
+        data_points: int — Number of history entries used
+    """
+    EMPTY_RESULT = {
+        "poc": None, "value_area_high": None, "value_area_low": None,
+        "sr_score": 50.0, "bin_size": 10.0, "total_bins": 0, "data_points": 0,
+    }
+
+    if not price_history or stock_code not in price_history:
+        return EMPTY_RESULT
+
+    history = price_history[stock_code]
+    if not history or len(history) < 5:
+        return EMPTY_RESULT
+
+    try:
+        # Collect (price, volume) pairs using adjusted data
+        pairs = []
+        for h in history:
+            price = h.get("adj_close") or h.get("close") or 0
+            vol = h.get("adj_volume") or h.get("volume") or 0
+            if price > 0 and vol > 0:
+                pairs.append((price, vol))
+
+        if len(pairs) < 5:
+            return EMPTY_RESULT
+
+        # Determine bin size — use NT$10 for most Taiwan stocks
+        # For very low-priced stocks (< NT$30), use NT$1 bins for granularity
+        min_price = min(p[0] for p in pairs)
+        max_price = max(p[0] for p in pairs)
+        bin_size = 10.0
+        if min_price < 30:
+            bin_size = 1.0
+        elif min_price < 100:
+            bin_size = 5.0
+
+        # Bin prices and accumulate volume
+        volume_bins = {}
+        for price, vol in pairs:
+            bin_idx = int(price / bin_size)
+            volume_bins[bin_idx] = volume_bins.get(bin_idx, 0) + vol
+
+        if not volume_bins:
+            return EMPTY_RESULT
+
+        total_volume = sum(volume_bins.values())
+
+        # Find POC — the bin with highest volume
+        poc_bin = max(volume_bins, key=volume_bins.get)
+        poc_price = (poc_bin + 0.5) * bin_size  # Midpoint of bin
+
+        # Compute Value Area — expand from POC until 67% of volume is captured
+        target_volume = total_volume * 0.67
+        sorted_bins = sorted(volume_bins.keys())
+        poc_idx_in_sorted = sorted_bins.index(poc_bin)
+
+        va_bins = [poc_bin]
+        va_volume = volume_bins[poc_bin]
+        left = poc_idx_in_sorted - 1
+        right = poc_idx_in_sorted + 1
+
+        while va_volume < target_volume and (left >= 0 or right < len(sorted_bins)):
+            left_vol = volume_bins[sorted_bins[left]] if left >= 0 else 0
+            right_vol = volume_bins[sorted_bins[right]] if right < len(sorted_bins) else 0
+
+            if left_vol >= right_vol and left >= 0:
+                va_bins.append(sorted_bins[left])
+                va_volume += left_vol
+                left -= 1
+            elif right < len(sorted_bins):
+                va_bins.append(sorted_bins[right])
+                va_volume += right_vol
+                right += 1
+            elif left >= 0:
+                va_bins.append(sorted_bins[left])
+                va_volume += left_vol
+                left -= 1
+            else:
+                break
+
+        value_area_low = min(va_bins) * bin_size
+        value_area_high = (max(va_bins) + 1) * bin_size
+
+        # Score support/resistance quality (0-100)
+        # Stocks trading near POC → stronger S/R → higher score
+        sr_score = 50.0  # Base
+
+        if current_price and current_price > 0:
+            # Distance from POC as percentage of price
+            poc_distance_pct = abs(current_price - poc_price) / current_price * 100
+
+            if poc_distance_pct < 1.0:
+                # Trading right at POC — very strong S/R
+                sr_score = 95.0
+            elif poc_distance_pct < 3.0:
+                # Near POC — strong S/R
+                sr_score = 80.0
+            elif poc_distance_pct < 5.0:
+                # Moderate distance — moderate S/R
+                sr_score = 65.0
+            elif poc_distance_pct < 10.0:
+                # Far from POC — weak S/R
+                sr_score = 40.0
+            else:
+                # Very far — POC not relevant for current price
+                sr_score = 20.0
+
+            # Bonus if price is within value area (fair value zone)
+            if value_area_low <= current_price <= value_area_high:
+                sr_score = min(100.0, sr_score + 10.0)
+
+        return {
+            "poc": round(poc_price, 2),
+            "value_area_high": round(value_area_high, 2),
+            "value_area_low": round(value_area_low, 2),
+            "sr_score": round(sr_score, 1),
+            "bin_size": bin_size,
+            "total_bins": len(volume_bins),
+            "data_points": len(pairs),
+        }
+    except Exception as e:
+        logger.debug("[Stage2] compute_volume_profile failed for %s: %r", stock_code, e)
+        return EMPTY_RESULT
+
+
+def classify_intraday_pattern(open_price, high_price, low_price, close_price):
+    """Phase 30: Classify candlestick pattern from OHLC relationships.
+
+    Uses adjusted OHLC data (Phase 2) to classify the most recent bar
+    into one of several candlestick pattern categories. Each pattern maps
+    to a sentiment score and confidence level.
+
+    Recognized patterns:
+        - bullish_engulfing: Strong bullish reversal
+        - bearish_engulfing: Strong bearish reversal
+        - doji: Indecision / potential reversal
+        - hammer: Bullish reversal (after downtrend)
+        - shooting_star: Bearish reversal (after uptrend)
+        - inside_bar: Consolidation / low volatility
+        - bullish_marubozu: Strong bullish continuation
+        - bearish_marubozu: Strong bearish continuation
+        - normal: No specific pattern detected
+
+    Returns dict with:
+        pattern: str — Pattern name
+        sentiment: float — Sentiment score from -0.5 (bearish) to +0.5 (bullish)
+        confidence: str — "high", "medium", or "low"
+        body_size: float — Absolute body size (|close - open|)
+        upper_wick: float — Upper shadow length
+        lower_wick: float — Lower shadow length
+    """
+    FALLBACK = {
+        "pattern": "normal", "sentiment": 0.0, "confidence": "low",
+        "body_size": 0.0, "upper_wick": 0.0, "lower_wick": 0.0,
+    }
+
+    if not all([open_price, high_price, low_price, close_price]):
+        return FALLBACK
+    if high_price < low_price:
+        return FALLBACK
+
+    try:
+        body_size = abs(close_price - open_price)
+        total_range = high_price - low_price
+        if total_range <= 0:
+            return FALLBACK
+
+        body_ratio = body_size / total_range  # 0 = no body, 1 = marubozu
+        is_bullish = close_price > open_price
+        is_bearish = close_price < open_price
+
+        upper_wick = high_price - max(open_price, close_price)
+        lower_wick = min(open_price, close_price) - low_price
+        upper_wick_ratio = upper_wick / total_range if total_range > 0 else 0
+        lower_wick_ratio = lower_wick / total_range if total_range > 0 else 0
+
+        # --- Doji: very small body relative to range ---
+        # Body < 10% of total range → indecision
+        if body_ratio < 0.10:
+            # Long-legged doji: both wicks substantial
+            if upper_wick_ratio > 0.30 and lower_wick_ratio > 0.30:
+                return {
+                    "pattern": "doji", "sentiment": 0.0, "confidence": "high",
+                    "body_size": round(body_size, 2),
+                    "upper_wick": round(upper_wick, 2),
+                    "lower_wick": round(lower_wick, 2),
+                }
+            # Dragonfly doji: long lower wick, tiny upper — mildly bullish
+            elif lower_wick_ratio > 0.50 and upper_wick_ratio < 0.15:
+                return {
+                    "pattern": "doji", "sentiment": 0.15, "confidence": "medium",
+                    "body_size": round(body_size, 2),
+                    "upper_wick": round(upper_wick, 2),
+                    "lower_wick": round(lower_wick, 2),
+                }
+            # Gravestone doji: long upper wick, tiny lower — mildly bearish
+            elif upper_wick_ratio > 0.50 and lower_wick_ratio < 0.15:
+                return {
+                    "pattern": "doji", "sentiment": -0.15, "confidence": "medium",
+                    "body_size": round(body_size, 2),
+                    "upper_wick": round(upper_wick, 2),
+                    "lower_wick": round(lower_wick, 2),
+                }
+            else:
+                return {
+                    "pattern": "doji", "sentiment": 0.0, "confidence": "medium",
+                    "body_size": round(body_size, 2),
+                    "upper_wick": round(upper_wick, 2),
+                    "lower_wick": round(lower_wick, 2),
+                }
+
+        # --- Hammer: small body at top, long lower wick (≥ 60% of range) ---
+        # Bullish reversal pattern after downtrend
+        if lower_wick_ratio >= 0.60 and body_ratio < 0.25 and upper_wick_ratio < 0.15:
+            return {
+                "pattern": "hammer", "sentiment": 0.35, "confidence": "high",
+                "body_size": round(body_size, 2),
+                "upper_wick": round(upper_wick, 2),
+                "lower_wick": round(lower_wick, 2),
+            }
+
+        # --- Shooting Star: small body at bottom, long upper wick (≥ 60%) ---
+        # Bearish reversal pattern after uptrend
+        if upper_wick_ratio >= 0.60 and body_ratio < 0.25 and lower_wick_ratio < 0.15:
+            return {
+                "pattern": "shooting_star", "sentiment": -0.35, "confidence": "high",
+                "body_size": round(body_size, 2),
+                "upper_wick": round(upper_wick, 2),
+                "lower_wick": round(lower_wick, 2),
+            }
+
+        # --- Inside Bar: today's range completely inside previous candle ---
+        # For single-bar classification, we check if the body is small and
+        # the range is contracting (body < 25% of range and both wicks small)
+        if body_ratio < 0.20 and upper_wick_ratio < 0.25 and lower_wick_ratio < 0.25:
+            return {
+                "pattern": "inside_bar", "sentiment": 0.0, "confidence": "medium",
+                "body_size": round(body_size, 2),
+                "upper_wick": round(upper_wick, 2),
+                "lower_wick": round(lower_wick, 2),
+            }
+
+        # --- Marubozu: very large body, tiny wicks ---
+        # Body > 80% of range
+        if body_ratio >= 0.80:
+            if is_bullish:
+                return {
+                    "pattern": "bullish_marubozu", "sentiment": 0.50, "confidence": "high",
+                    "body_size": round(body_size, 2),
+                    "upper_wick": round(upper_wick, 2),
+                    "lower_wick": round(lower_wick, 2),
+                }
+            else:
+                return {
+                    "pattern": "bearish_marubozu", "sentiment": -0.50, "confidence": "high",
+                    "body_size": round(body_size, 2),
+                    "upper_wick": round(upper_wick, 2),
+                    "lower_wick": round(lower_wick, 2),
+                }
+
+        # --- Engulfing patterns: require previous bar context ---
+        # Since we only have one bar, we approximate: large body (> 60% of range)
+        # with a directional close that dominates
+        if body_ratio >= 0.55:
+            if is_bullish:
+                return {
+                    "pattern": "bullish_engulfing", "sentiment": 0.40, "confidence": "medium",
+                    "body_size": round(body_size, 2),
+                    "upper_wick": round(upper_wick, 2),
+                    "lower_wick": round(lower_wick, 2),
+                }
+            elif is_bearish:
+                return {
+                    "pattern": "bearish_engulfing", "sentiment": -0.40, "confidence": "medium",
+                    "body_size": round(body_size, 2),
+                    "upper_wick": round(upper_wick, 2),
+                    "lower_wick": round(lower_wick, 2),
+                }
+
+        # --- Default: directional bias based on close vs open ---
+        if is_bullish:
+            sentiment = min(0.2, body_ratio * 0.3)
+        elif is_bearish:
+            sentiment = max(-0.2, -body_ratio * 0.3)
+        else:
+            sentiment = 0.0
+
+        return {
+            "pattern": "normal", "sentiment": round(sentiment, 2),
+            "confidence": "low",
+            "body_size": round(body_size, 2),
+            "upper_wick": round(upper_wick, 2),
+            "lower_wick": round(lower_wick, 2),
+        }
+    except Exception as e:
+        logger.debug("[Stage2] classify_intraday_pattern failed: %r", e)
+        return FALLBACK
+
+
 def validate_stage1_candidates(candidates, verbose=False):
     """Phase 11: Validate Stage 1 candidates using Pydantic schema before Stage 2 processing.
 
@@ -381,6 +699,32 @@ def run_stage2(date_str=None, verbose=False):
     pledge_data = datasets.get("pledge", [])
     penalty_data = datasets.get("penalties", [])
     
+    # Phase 30: Load price history for volume profile and intraday pattern analysis
+    price_history = None
+    data_dir = Path(__file__).parent.parent / "data"
+    db_path = data_dir / "hunter.db"
+    if db_path.exists():
+        try:
+            from datastore import get_daily_history_batch
+            stock_codes_s2 = [str(c.get("code", "")) for c in stage1_results.get("candidates", [])]
+            stock_codes_s2 = [c for c in stock_codes_s2 if c]
+            if stock_codes_s2:
+                price_history = get_daily_history_batch(
+                    stock_codes_s2, limit=30, data_dir=str(data_dir)
+                )
+                logger.info("Phase 30: Price history loaded for volume profile: %d stocks", len(price_history))
+        except Exception as e:
+            logger.debug("Phase 30: SQLite price history load failed: %s", e)
+            price_history = None
+    if price_history is None:
+        history_file = data_dir / "price_history.json"
+        if history_file.exists():
+            try:
+                with open(history_file, 'r', encoding='utf-8') as f:
+                    price_history = json.load(f)
+            except Exception:
+                pass
+    
     # Phase 19: Pre-build index dicts for O(1) lookups instead of O(n) scans
     dividends_index = _index_by_stock_code(dividends_data)
     announce_index = _index_by_stock_code(announce_data)
@@ -438,6 +782,32 @@ def run_stage2(date_str=None, verbose=False):
         sh_result = check_major_shareholders(code, major_sh_data, shareholders_index)
         pledge_result = check_pledge_risk(code, pledge_data, pledge_index)
         penalty_result = check_penalty_risk(code, penalty_data, penalty_index)
+        
+        # Phase 30: Market microstructure analysis
+        current_price = safe_float(candidate.get("close", 0), 0)
+        vol_profile = compute_volume_profile(price_history, code, current_price=current_price)
+        
+        # Phase 30: Intraday pattern classification from latest OHLC
+        latest_ohlc = None
+        if price_history and code in price_history:
+            hist = price_history[code]
+            if hist:
+                latest_ohlc = hist[-1]  # Most recent entry
+        if latest_ohlc:
+            intraday_pattern = classify_intraday_pattern(
+                open_price=safe_float(latest_ohlc.get("open") or latest_ohlc.get("adj_close"), 0),
+                high_price=safe_float(latest_ohlc.get("high"), 0),
+                low_price=safe_float(latest_ohlc.get("low"), 0),
+                close_price=safe_float(latest_ohlc.get("adj_close") or latest_ohlc.get("close"), 0),
+            )
+        else:
+            # Fallback: try candidate's daily data
+            intraday_pattern = classify_intraday_pattern(
+                open_price=safe_float(candidate.get("open"), 0),
+                high_price=safe_float(candidate.get("high"), 0),
+                low_price=safe_float(candidate.get("low"), 0),
+                close_price=current_price,
+            )
         
         # Phase 12 R2: Handle None returns from checks (missing data → skip gracefully)
         div_score, div_status = (div_result if div_result is not None else (None, "error"))
@@ -499,6 +869,10 @@ def run_stage2(date_str=None, verbose=False):
                     "pledge": {"score": pledge_score, "status": pledge_status},
                     "penalties": {"score": penalty_score, "status": penalty_status}
                 },
+                "microstructure": {
+                    "volume_profile": vol_profile,
+                    "intraday_pattern": intraday_pattern,
+                },
                 "combined_score": 0
             }
             disqualified.append(result)
@@ -533,6 +907,10 @@ def run_stage2(date_str=None, verbose=False):
                 "shareholders": {"score": sh_score, "status": sh_status},
                 "pledge": {"score": pledge_score, "status": pledge_status},
                 "penalties": {"score": penalty_score, "status": penalty_status}
+            },
+            "microstructure": {
+                "volume_profile": vol_profile,
+                "intraday_pattern": intraday_pattern,
             },
             "combined_score": round((stage1_score * 0.6 + fundamental_score * 0.4), 1)
         }
