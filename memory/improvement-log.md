@@ -627,3 +627,35 @@ Portfolio Optimizer: optimized weights produced, constraints validated
 
 ### Unit Tests: PASSED ✅ (73/73)
 ---
+
+## Phase 39 — Performance Dashboard UI (2026-05-17)
+
+**Status:** 🔄 IN PROGRESS — Layout design complete, awaiting implementation  
+**Layout Design Commit:** `235cb96`  
+**Design doc:** `docs/dashboard-layout-design.md` (668 lines)
+
+### Layout Design Review ✅
+Z.ai produced a comprehensive layout design document with:
+- **ASCII wireframes:** Detailed page-level architecture + full detailed wireframe with 10 sections
+- **Section specs:** Header bar, KPI card row (5 cards), top candidates table, portfolio allocation donut+bar, P&L performance chart, risk indicators (VaR gauge, concentration bars, status grid), regime trend history, cross-asset monitor, signal fusion radar, pipeline timeline
+- **Color scheme:** GitHub Dark-inspired palette with 11 base tokens, 5 regime colors, 15 sector-specific colors
+- **Typography:** Noto Sans TC for labels, Sarasa Mono SC for tabular data (proper CJK alignment)
+- **Tech stack:** Chart.js 4.x CDN + Tailwind CSS CDN + Lucide Icons CDN — zero build step required
+
+### Review Corrections Sent to Z.ai:
+1. **Portfolio file path:** Use `data/optimized_portfolio_{date}.json` (NOT `portfolio_{date}.json`)
+2. **Paper trades empty:** `paper_trades.json` may be `[]` — show "尚無交易記錄" placeholder, don't crash
+3. **Regime history missing:** `regime_history.json` doesn't exist yet (Phase 40) — show current regime only with note
+4. **VaR gauge workaround:** Chart.js has no native gauge chart — use doughnut clip-bottom technique or polar area chart
+5. **Ensemble signals mapping:** Confirmed exact 13 keys: technical_momentum, fundamentals, revenue_quality, shareholders, pledge_ratio, dividends, institutional_flow, signal_quality, microstructure, news_sentiment, cross_asset, earnings_quality, risk_management → map to Traditional Chinese labels (技術動能, 基本面, 營收品質, etc.)
+6. **CORS handling:** Document that `python3 -m http.server 8080` is required (file:// protocol blocks fetch)
+
+### Design Assessment
+- ✅ Comprehensive section coverage matching all pipeline outputs
+- ✅ Traditional Chinese labels throughout
+- ✅ Color-coded regime system matches Phase 4 tiered system
+- ✅ Radar chart axes match Phase 37 ensemble dimensions exactly
+- ✅ Dark theme appropriate for trading terminal aesthetic
+- ⚠️ Some data sources need graceful degradation (paper_trades empty, no regime_history yet)
+
+### Next: Implementation by Z.ai based on approved design + corrections.

@@ -1,7 +1,7 @@
 {
   "current_phase": 39,
-  "phase_name": "Next phase TBD",
-  "started_at": null,
+  "phase_name": "Performance Dashboard UI — modern dark-theme dashboard for tracking screening & portfolio performance visually",
+  "started_at": "2026-05-17T07:00:00+08:00",
   "completed_phases": [
     {
       "phase": 0,
