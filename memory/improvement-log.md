@@ -543,3 +543,26 @@ Stage 2: 1 passed, 0 disqualified
 Stage 1: 1 passed, 15 watchlist, 1343 rejected
 Stage 2: 1 passed, 0 disqualified
 ```
+
+## Phase 36 — Risk Management Overlay (2026-05-17)
+
+**Status:** ✅ COMPLETE  
+**Commits:** `efb3d87`  
+**Code review:** ✅ Taiwan-market correct
+
+### What Changed
+- **core/risk_manager.py** (764 lines): ATR-based stop-loss tiers, trailing stops by conviction grade (A:E = 15%-25%), position limit enforcement (stock ≤8%, sector ≤25%, correlation <0.85), portfolio VaR estimation via historical simulation (60-day lookback), risk summary dashboard (1-10 score)
+- **core/paper_trader.py**: Integrated pre-trade risk gate, ATR stops and trailing stop config stored per position, conviction-based position sizing
+- **tests/test_risk_manager.py**: Comprehensive test coverage
+
+### Review Notes
+- Traditional Chinese labels throughout ✓
+- Conviction grade tiers correctly tighten for higher quality signals (A=15%, E=25%) ✓
+- Taiwan regulatory guidelines followed (8% single stock cap) ✓
+- Graceful degradation — all functions return neutral/allow when data unavailable ✓
+- Backward compatible with existing paper_trader workflow ✓
+
+### Pipeline Test
+**PASSED** ✅ 10/10 stages in 41.3s
+
+---

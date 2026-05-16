@@ -1,7 +1,7 @@
 {
-  "current_phase": 36,
-  "phase_name": "Risk management overlay — implement stop-loss tiers (ATR-based hard stops, trailing stops for winners), position sizing constraints per conviction grade from signal quality scoring, and portfolio-level VaR estimation. New core/risk_manager.py module.",
-  "started_at": "2026-05-17T02:24:00+08:00",
+  "current_phase": 37,
+  "phase_name": "Machine learning signal fusion — ensemble model combining all Phase 26-36 scoring dimensions (technical, fundamental, microstructure, cross-asset, earnings) into unified probability of outperformance. New core/signal_fusion.py module.",
+  "started_at": null,
   "completed_phases": [
     {
       "phase": 0,
@@ -273,9 +273,17 @@
       "completed_at": "2026-05-17T02:24:00+08:00",
       "summary": "Created core/earnings_analysis.py (810 lines) with fetch_earnings_data(), compute_yoy_growth(), compute_qoq_growth(), check_estimate_surprise(), get_earnings_signal(). Added data/analyst_consensus.json template. Integrated into stage2_deep.py as check_earnings_quality() with weight 0.12 (weights.json v6.0). Red flag: earnings score < 20 disqualifies from Stage 2 pass. Backward compatible — all functions return None/neutral when data unavailable. Taiwan-market aware with Traditional Chinese labels and TWSE quarterly financials endpoint. Pipeline: 10/10 stages passed in 39.1s.",
       "commit": "fa52894, bb2b013, 0559b88, ddefc17"
+    },
+    {
+      "phase": 36,
+      "name": "Risk management overlay — ATR stops, position limits, VaR estimation",
+      "started_at": "2026-05-17T03:11:16.207767+08:00",
+      "completed_at": "2026-05-17T03:11:16.207786+08:00",
+      "summary": "Created core/risk_manager.py (764 lines) with ATR-based stop-loss tiers, trailing stops by conviction grade (A:E = 15%-25%), position limit enforcement (stock ≤8%, sector ≤25%, correlation <0.85), portfolio VaR estimation via historical simulation (60-day lookback), risk summary dashboard (1-10 score). Integrated into paper_trader.py with pre-trade risk gate, ATR stops, and conviction-based sizing. All Traditional Chinese labels, backward compatible.",
+      "commit": "efb3d87"
     }
   ],
-  "notes": "Phase 35 complete. Earnings season engine (earnings_analysis.py) integrated into Stage 2 scoring with YoY/QoQ growth metrics and analyst estimate surprise checks.",
+  "notes": "Phase 36 complete. Risk management overlay integrated with conviction-based stops and portfolio VaR.",
   "rounds_completed": 14,
   "last_zai_round": {
     "round": 6,
