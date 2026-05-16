@@ -1,0 +1,90 @@
+{
+  "version": "1.0",
+  "updated": "2026-05-17",
+  "notes": "Phase 37: Initial weights proportional to Phase 28 backtest Sharpe ratios per dimension. Non-linear interaction terms for momentum*volume and earnings*fundamental synergy.",
+  "dimensions": {
+    "technical_momentum": {
+      "weight": 0.12,
+      "source": "stage1: technical_momentum (RSI, MACD, SMA)",
+      "sharpe_proxy": 1.2
+    },
+    "fundamentals": {
+      "weight": 0.10,
+      "source": "stage2: fundamentals (P/E, P/B, ROE, dividend yield)",
+      "sharpe_proxy": 1.0
+    },
+    "revenue_quality": {
+      "weight": 0.09,
+      "source": "stage2: revenue (YoY growth, margin trends)",
+      "sharpe_proxy": 0.9
+    },
+    "shareholders": {
+      "weight": 0.06,
+      "source": "stage2: shareholders (institutional ownership quality)",
+      "sharpe_proxy": 0.6
+    },
+    "pledge_ratio": {
+      "weight": 0.07,
+      "source": "stage2: pledge (major shareholder pledge risk)",
+      "sharpe_proxy": 0.7
+    },
+    "dividends": {
+      "weight": 0.08,
+      "source": "stage2: dividends (payout consistency, yield)",
+      "sharpe_proxy": 0.8
+    },
+    "institutional_flow": {
+      "weight": 0.10,
+      "source": "stage1: institutional_flow (foreign/domestic net buys)",
+      "sharpe_proxy": 1.0
+    },
+    "signal_quality": {
+      "weight": 0.08,
+      "source": "phase 27: signal_strength, confidence (conviction grade A-E)",
+      "sharpe_proxy": 0.8
+    },
+    "microstructure": {
+      "weight": 0.07,
+      "source": "phase 30: VPVR position, gap-fill, volume anomalies, candlestick",
+      "sharpe_proxy": 0.7
+    },
+    "news_sentiment": {
+      "weight": 0.06,
+      "source": "phase 31: Traditional Chinese keyword scoring",
+      "sharpe_proxy": 0.6
+    },
+    "cross_asset": {
+      "weight": 0.05,
+      "source": "phase 34: TAIEX/HSI/VIX/USD-TWD correlation",
+      "sharpe_proxy": 0.5
+    },
+    "earnings_quality": {
+      "weight": 0.07,
+      "source": "phase 35: YoY/QoQ growth, estimate surprises, beat streaks",
+      "sharpe_proxy": 0.7
+    },
+    "risk_management": {
+      "weight": 0.05,
+      "source": "phase 36: ATR stops, VaR score, conviction-based sizing",
+      "sharpe_proxy": 0.5
+    }
+  },
+  "interaction_terms": {
+    "momentum_volume_bonus": {
+      "dimensions": ["technical_momentum", "microstructure"],
+      "bonus_weight": 0.03,
+      "description": "Momentum confirmed by volume anomaly = stronger signal"
+    },
+    "earnings_fundamental_synergy": {
+      "dimensions": ["earnings_quality", "fundamentals"],
+      "bonus_weight": 0.02,
+      "description": "Strong earnings on solid fundamentals = synergistic boost"
+    }
+  },
+  "calibration": {
+    "method": "isotonic_regression",
+    "sigmoid_k": 1.0,
+    "sigmoid_x0": 50.0,
+    "description": "Raw weighted sum mapped through sigmoid to [0,1], then calibrated via isotonic regression against historical win rates"
+  }
+}
