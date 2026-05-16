@@ -6,3 +6,8 @@ reports/
 .env
 *.log
 .pytest_cache/
+state.json
+
+# Z.ai agent environment noise (not project files)
+skills/
+download/
