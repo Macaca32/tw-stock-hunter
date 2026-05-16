@@ -193,7 +193,9 @@ def safe_float(val, default=0.0):
 
 def get_field(stock, chinese_key, english_key, default=""):
     """Get field value trying both Chinese and English keys"""
-    return stock.get(chinese_key, stock.get(english_key, default))
+    # Use 'or' chain instead of nested .get() — when the key exists but value is None,
+    # .get() returns None (not the default). The 'or' chain falls through correctly.
+    return stock.get(chinese_key) or stock.get(english_key) or default
 
 
 def _index_by_stock_code(data_list, code_keys=None):
@@ -274,8 +276,8 @@ def check_hard_filters(stock, company_info, datasets, thresholds, price_history=
             # Calculate average daily VALUE (price × volume), not just volume
             daily_values = []
             for h in history[-20:]:
-                price = h.get("adj_close", h.get("close", 0))
-                vol = h.get("adj_volume", h.get("volume", 0))
+                price = h.get("adj_close") or h.get("close") or 0
+                vol = h.get("adj_volume") or h.get("volume") or 0
                 if price > 0 and vol > 0:
                     daily_values.append(price * vol)
             if daily_values:
@@ -288,8 +290,8 @@ def check_hard_filters(stock, company_info, datasets, thresholds, price_history=
             # Fallback: use last 5 days if we don't have 20
             daily_values = []
             for h in history[-5:]:
-                price = h.get("adj_close", h.get("close", 0))
-                vol = h.get("adj_volume", h.get("volume", 0))
+                price = h.get("adj_close") or h.get("close") or 0
+                vol = h.get("adj_volume") or h.get("volume") or 0
                 if price > 0 and vol > 0:
                     daily_values.append(price * vol)
             if daily_values:
@@ -699,8 +701,8 @@ def score_technical_momentum(stock_code, daily_data, pe_data=None, price_history
 def _score_momentum_with_history(history):
     """Score momentum with 20+ days of price history"""
     try:
-        closes = [h.get("adj_close", h.get("close", 0)) for h in history[-20:]]
-        volumes = [h.get("adj_volume", h.get("volume", 0)) for h in history[-20:]]
+        closes = [h.get("adj_close") or h.get("close") or 0 for h in history[-20:]]
+        volumes = [h.get("adj_volume") or h.get("volume") or 0 for h in history[-20:]]
         
         if not closes or closes[0] == 0:
             return 25
@@ -775,7 +777,7 @@ def _score_momentum_with_history(history):
 def _score_momentum_short_history(history):
     """Score momentum with 5-19 days of price history"""
     try:
-        closes = [h.get("adj_close", h.get("close", 0)) for h in history]
+        closes = [h.get("adj_close") or h.get("close") or 0 for h in history]
         
         if not closes or closes[0] == 0:
             return 25
