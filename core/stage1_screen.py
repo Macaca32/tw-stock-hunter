@@ -1084,6 +1084,12 @@ def run_stage1(date_str=None, verbose=False):
         for c in valid_candidates[:5]:
             logger.info("  %s %s: %s", c['code'], c['name'], c['composite_score'])
     
+    # Phase 25: Persist results to disk so downstream stages (stage2_deep) can
+    # load them via load_stage1_results(). Previously save_stage1_results() was
+    # only called in the CLI main(), meaning the pipeline path never wrote the
+    # file — causing "No such file or directory: data/stage1_YYYY-MM-DD.json".
+    save_stage1_results(output)
+    
     return output
 
 
