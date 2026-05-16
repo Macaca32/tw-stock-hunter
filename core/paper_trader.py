@@ -1472,6 +1472,238 @@ days would inflate holding period and trigger premature max_holding_days exits.
             "date": date_str,
         }
 
+    def check_correlation_risk(self, positions=None, price_history=None,
+                               lookback_days=20, correlation_threshold=0.85):
+        """Check pairwise correlation between holdings and compute effective portfolio beta.
+
+        Phase 28: Computes pairwise Pearson correlation between all holdings using
+        their price history over the last `lookback_days` trading days. If any two
+        holdings have correlation > `correlation_threshold` (default 0.85), the
+        smaller position is reduced by 50% to limit concentration risk.
+
+        Also reports effective portfolio beta as a risk metric. Portfolio beta is
+        computed as the weighted-average beta of each holding relative to the
+        equal-weight portfolio of all holdings (since a market index benchmark
+        is not directly available in the paper trading system).
+
+        Args:
+            positions: List of position dicts (each must have 'code' and
+                       optionally 'allocation_pct'). If None, uses
+                       self.active_positions.
+            price_history: Dict of {code: [{date, close, ...}, ...]}. If None,
+                           loads from data directory.
+            lookback_days: Number of days of price history for correlation
+                           computation (default 20).
+            correlation_threshold: Correlation above which positions are flagged
+                                   for reduction (default 0.85).
+
+        Returns:
+            Dict with:
+                pairwise_correlations: list of {pair, correlation, flagged}
+                high_correlation_pairs: list of pairs with corr > threshold
+                position_adjustments: list of {code, original_pct, adjusted_pct,
+                                      reason}
+                effective_portfolio_beta: float
+                holdings_analyzed: int
+                correlation_matrix: dict of {code: {code: correlation}}
+        """
+        if positions is None:
+            positions = self.active_positions
+
+        if price_history is None:
+            price_history = self.load_price_history()
+
+        if not positions or not price_history:
+            return {
+                "pairwise_correlations": [],
+                "high_correlation_pairs": [],
+                "position_adjustments": [],
+                "effective_portfolio_beta": 0,
+                "holdings_analyzed": 0,
+                "correlation_matrix": {},
+                "note": "No positions or price history available",
+            }
+
+        # Step 1: Extract daily returns for each holding
+        holding_codes = []
+        holding_returns = {}  # code -> [daily_return, ...]
+        holding_allocs = {}   # code -> allocation_pct
+
+        for pos in positions:
+            code = pos.get("code", "")
+            if not code or code not in price_history:
+                continue
+
+            history = price_history[code]
+            if len(history) < lookback_days + 1:
+                continue
+
+            # Take last lookback_days + 1 entries to compute lookback_days returns
+            recent = history[-(lookback_days + 1):]
+
+            # Compute daily returns
+            returns = []
+            for i in range(1, len(recent)):
+                prev = recent[i - 1].get("adj_close", recent[i - 1].get("close", 0))
+                curr = recent[i].get("adj_close", recent[i].get("close", 0))
+                if prev > 0:
+                    returns.append((curr - prev) / prev)
+
+            if len(returns) < 10:
+                # Not enough return data for reliable correlation
+                continue
+
+            holding_codes.append(code)
+            holding_returns[code] = returns
+            holding_allocs[code] = pos.get("allocation_pct", 0)
+
+        if len(holding_codes) < 2:
+            return {
+                "pairwise_correlations": [],
+                "high_correlation_pairs": [],
+                "position_adjustments": [],
+                "effective_portfolio_beta": 0,
+                "holdings_analyzed": len(holding_codes),
+                "correlation_matrix": {},
+                "note": "Fewer than 2 holdings with sufficient price data",
+            }
+
+        # Step 2: Compute pairwise correlations
+        correlation_matrix = {}
+        pairwise_list = []
+        high_corr_pairs = []
+
+        for i, code_a in enumerate(holding_codes):
+            correlation_matrix.setdefault(code_a, {})[code_a] = 1.0
+
+            for j in range(i + 1, len(holding_codes)):
+                code_b = holding_codes[j]
+
+                returns_a = holding_returns[code_a]
+                returns_b = holding_returns[code_b]
+
+                # Align by length
+                min_len = min(len(returns_a), len(returns_b))
+                if min_len < 10:
+                    corr = 0.0
+                else:
+                    ra = returns_a[:min_len]
+                    rb = returns_b[:min_len]
+
+                    mean_a = sum(ra) / min_len
+                    mean_b = sum(rb) / min_len
+
+                    cov = sum((ra[k] - mean_a) * (rb[k] - mean_b)
+                              for k in range(min_len)) / min_len
+                    std_a = math.sqrt(sum((x - mean_a) ** 2 for x in ra) / min_len)
+                    std_b = math.sqrt(sum((x - mean_b) ** 2 for x in rb) / min_len)
+
+                    if std_a > 0 and std_b > 0:
+                        corr = cov / (std_a * std_b)
+                    else:
+                        corr = 0.0
+
+                corr = round(max(-1.0, min(1.0, corr)), 3)
+
+                correlation_matrix.setdefault(code_a, {})[code_b] = corr
+                correlation_matrix.setdefault(code_b, {})[code_a] = corr
+
+                flagged = corr > correlation_threshold
+                pair_info = {
+                    "pair": f"{code_a}/{code_b}",
+                    "code_a": code_a,
+                    "code_b": code_b,
+                    "correlation": corr,
+                    "flagged": flagged,
+                }
+                pairwise_list.append(pair_info)
+
+                if flagged:
+                    high_corr_pairs.append(pair_info)
+
+        # Step 3: Reduce smaller position for high-correlation pairs
+        position_adjustments = []
+        adjusted_allocs = dict(holding_allocs)  # Copy original allocations
+
+        for pair in high_corr_pairs:
+            code_a = pair["code_a"]
+            code_b = pair["code_b"]
+
+            alloc_a = adjusted_allocs.get(code_a, 0)
+            alloc_b = adjusted_allocs.get(code_b, 0)
+
+            # Identify the smaller position
+            if alloc_a <= alloc_b:
+                smaller_code, smaller_alloc = code_a, alloc_a
+                larger_code = code_b
+            else:
+                smaller_code, smaller_alloc = code_b, alloc_b
+                larger_code = code_a
+
+            # Reduce the smaller position by 50%
+            new_alloc = round(smaller_alloc * 0.5, 2)
+            adjusted_allocs[smaller_code] = new_alloc
+
+            position_adjustments.append({
+                "code": smaller_code,
+                "original_pct": smaller_alloc,
+                "adjusted_pct": new_alloc,
+                "reduction_reason": (
+                    f"Correlation {pair['correlation']} with {larger_code} "
+                    f"exceeds threshold {correlation_threshold}"
+                ),
+            })
+
+        # Step 4: Compute effective portfolio beta
+        # Beta of each holding vs equal-weight portfolio of all holdings
+        # Portfolio return = equal-weight average of all holding returns
+        min_len = min(len(r) for r in holding_returns.values())
+        all_returns = {code: rets[:min_len] for code, rets in holding_returns.items()}
+
+        # Compute portfolio returns (equal-weight)
+        portfolio_rets = []
+        for k in range(min_len):
+            day_avg = sum(all_returns[code][k] for code in holding_codes) / len(holding_codes)
+            portfolio_rets.append(day_avg)
+
+        # Compute beta for each holding: Cov(stock, portfolio) / Var(portfolio)
+        mean_port = sum(portfolio_rets) / min_len
+        var_port = sum((r - mean_port) ** 2 for r in portfolio_rets) / min_len
+
+        weighted_beta = 0.0
+        total_weight = 0.0
+
+        for code in holding_codes:
+            returns = all_returns[code]
+            mean_stock = sum(returns) / min_len
+
+            cov = sum((returns[k] - mean_stock) * (portfolio_rets[k] - mean_port)
+                      for k in range(min_len)) / min_len
+
+            beta = cov / var_port if var_port > 0 else 1.0
+
+            # Weight beta by allocation
+            weight = adjusted_allocs.get(code, 0)
+            if weight <= 0:
+                # If no allocation_pct, use equal weight
+                weight = 1.0 / len(holding_codes)
+
+            weighted_beta += beta * weight
+            total_weight += weight
+
+        effective_beta = round(weighted_beta / total_weight, 2) if total_weight > 0 else 1.0
+
+        return {
+            "pairwise_correlations": pairwise_list,
+            "high_correlation_pairs": high_corr_pairs,
+            "position_adjustments": position_adjustments,
+            "effective_portfolio_beta": effective_beta,
+            "holdings_analyzed": len(holding_codes),
+            "correlation_matrix": correlation_matrix,
+            "lookback_days": lookback_days,
+            "correlation_threshold": correlation_threshold,
+        }
+
     def save_trades(self):
         """Save trades to file"""
         trades_file = self.data_dir / "paper_trades.json"
