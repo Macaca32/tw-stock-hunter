@@ -2,7 +2,7 @@
 """
 Pipeline Runner — Orchestrates the full tw-stock-hunter pipeline
 
-Chains: fetch_data → fetch_history → detect_regime → db_migrate → stage1_screen → stage2_deep → paper_trader → telegram_alerts → report_generator → signal_fusion
+Chains: fetch_data → fetch_history → detect_regime → db_migrate → stage1_screen → stage2_deep → paper_trader → telegram_alerts → report_generator → signal_fusion → portfolio_optimizer
 
 Usage:
     python run_pipeline.py                       # Run for today
@@ -325,6 +325,28 @@ def run_pipeline(date_str=None, verbose=False):
         print(f"   Ensemble: {n_stocks} stocks scored, avg={avg_score:.3f}, "
               f"high-conviction={n_high}")
 
+    # ── Stage 12: Portfolio Optimizer ──────────────────────────────────
+    # Phase 38: Mean-variance / Black-Litterman portfolio optimization
+    # with Taiwan market constraints. Takes signal_fusion ensemble scores
+    # + price history to produce optimized portfolio weights.
+    # Backward compatible — skips gracefully if ensemble results missing
+    # or covariance matrix can't be computed (<30 trading days).
+    from portfolio_optimizer import run_portfolio_optimizer
+
+    portfolio_result = _run_stage(
+        "portfolio_optimizer",
+        lambda **kw: run_portfolio_optimizer(date_str=date_str, verbose=verbose),
+        result,
+        verbose=verbose,
+    )
+    if verbose and portfolio_result:
+        n_opt = portfolio_result.get("n_stocks", 0)
+        method = portfolio_result.get("optimization_method", "?")
+        sharpe = portfolio_result.get("sharpe_ratio", 0)
+        smoothed = "（已平滑）" if portfolio_result.get("smoothing_applied") else ""
+        print(f"   Portfolio: {n_opt} stocks, method={method}{smoothed}, "
+              f"sharpe={sharpe:.2f}")
+
     return _finalize(result, verbose)
 
 
@@ -393,16 +415,17 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Pipeline stages:
-  1.  fetch_data      — Fetch TWSE data (daily, PE, revenue, etc.)
-  2.  fetch_history   — Build historical price data
-  3.  detect_regime   — Detect market regime
-  4.  db_migrate      — Migrate JSON data to SQLite (Phase 25)
-  5.  stage1_screen   — Quantitative pre-screen
-  6.  stage2_deep     — Fundamental deep-dive
-  7.  paper_trader    — Paper trading simulation
-  8.  telegram_alerts — Send alerts (if enabled)
-  10. report_generator — Generate Markdown/HTML daily reports (Phase 32)
-  11. signal_fusion   — ML ensemble fusion of all scoring dimensions (Phase 37)
+  1.  fetch_data        — Fetch TWSE data (daily, PE, revenue, etc.)
+  2.  fetch_history     — Build historical price data
+  3.  detect_regime     — Detect market regime
+  4.  db_migrate        — Migrate JSON data to SQLite (Phase 25)
+  5.  stage1_screen     — Quantitative pre-screen
+  6.  stage2_deep       — Fundamental deep-dive
+  7.  paper_trader      — Paper trading simulation
+  8.  telegram_alerts   — Send alerts (if enabled)
+  10. report_generator  — Generate Markdown/HTML daily reports (Phase 32)
+  11. signal_fusion     — ML ensemble fusion of all scoring dimensions (Phase 37)
+  12. portfolio_optimizer — Portfolio optimization with Taiwan constraints (Phase 38)
 """,
     )
     parser.add_argument(
