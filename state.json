@@ -1,7 +1,7 @@
 {
   "version": "1.5",
-  "last_run": "2026-05-09T11:17:58.562462",
-  "last_date": "2026-05-09",
+  "last_run": "2026-05-16T17:39:05.874200",
+  "last_date": "2026-05-16",
   "pipeline": {
     "stage1": {
       "passed": 399,
@@ -35,5 +35,12 @@
   ],
   "cron_job": "c2f1a4b0-80e1-45bb-9f37-9965607e59ff",
   "cron_schedule": "15:30 TWT, Mon-Fri",
-  "status": "Phase 1 complete - all modules working"
+  "status": "Phase 1 complete - all modules working",
+  "pipeline_run": {
+    "timestamp": "2026-05-16T17:39:05.874218",
+    "total_elapsed_sec": 36.06,
+    "stages_completed": 9,
+    "stages_total": 9,
+    "failed_stage": null
+  }
 }
