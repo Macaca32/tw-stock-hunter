@@ -1,6 +1,6 @@
 {
-  "current_phase": 31,
-  "phase_name": "News sentiment integration — scrape Taiwan financial news (UDN, CBN, Anue), classify sentiment with keyword matching and NLP-lite scoring, integrate sentiment signal into Stage 2 deep analysis",
+  "current_phase": 32,
+  "phase_name": "TBD — next phase after news sentiment integration",
   "started_at": "2026-05-16T14:00:00+08:00",
   "completed_phases": [
     {
@@ -233,6 +233,14 @@
       "completed_at": "2026-05-16T17:30:00+08:00",
       "summary": "Four new functions across stage1_screen.py (+298 lines) and stage2_deep.py (+378 lines): compute_volume_profile() approximates VPVR with adaptive bin sizes (NT\\/5/10); compute_gap_fill_probability() analyzes historical gap patterns with fill rate stats; detect_volume_anomalies() flags institutional interest/low conviction via 20-day rolling median; classify_intraday_pattern() recognizes 9 candlestick types. Microstructure adjustments integrated into Stage 1 composite scoring (capped ±10 points). All use adjusted prices/volumes from Phase 2.",
       "commit": "e3ee417, a56e4e8"
+    },
+    {
+      "phase": 31,
+      "name": "News sentiment integration — scrape Taiwan financial news (UDN, CBN), classify sentiment with keyword matching and NLP-lite scoring, integrate sentiment signal into Stage 2 deep analysis",
+      "started_at": "2026-05-16T14:30:00+08:00",
+      "completed_at": "2026-05-16T19:00:00+08:00",
+      "summary": "Created core/news_sentiment.py with news fetching from UDN/CBN, Traditional Chinese keyword sentiment classification (19 positive, 20 negative keywords), loss aversion bias (1.3x negative weight), recency weighting (7-day linear decay), and Stage 2 integration via check_news_sentiment(). Sentiment maps to score (+0.5→90, neutral→60, -0.5→30). Cache in data/news_cache.json with 4h TTL. Added news_sentiment:0.11 weight to weights.json (v5.0). Red flag: score<35 disqualifies from Stage 2. Graceful fallback if fetch fails. 39 new tests, 119 total passing.",
+      "commit": "09d5d6c, c4e0eb3, 1f57040, 3b23456"
     }
   ],
   "notes": "Phase 23 done. SQLite data layer provides efficient historical queries and cumulative tracking on top of existing JSON data files.",

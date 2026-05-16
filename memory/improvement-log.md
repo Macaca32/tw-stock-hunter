@@ -346,3 +346,44 @@ Modified files: `core/stage1_screen.py` (+298 lines), `core/stage2_deep.py` (+37
 ```
 
 ### Dry Run Test: PASSED ✅ (all 80 tests)
+
+---
+
+## Phase 31: News Sentiment Integration ✅ — Completed 2026-05-16
+
+### Commits (4):
+| # | Commit | Description |
+|---|--------|-------------|
+| 1 | `09d5d6c` | core/news_sentiment.py — news fetching, sentiment classification, caching |
+| 2 | `c4e0eb3` | core/stage2_deep.py — integrate check_news_sentiment() into Stage 2 pipeline |
+| 3 | `1f57040` | config/weights.json — add news_sentiment: 0.11 weight, rebalance others |
+| 4 | `3b23456` | tests/test_news_sentiment.py — 39 tests (all passing) |
+
+### Implementation Details:
+- **Sentiment mapping:** +0.5→90, 0.0→60, -0.5→30 (linear: score = 60 + sentiment × 60)
+- **Positive keywords (19):** 突破, 創新高, 獲利, 成長, 營收增, 看好, 利多, 漲停, 買超, 布局, 擴產, 新訂單, 轉盈, 大賺, 展望佳, 營收創高, 股價創高
+- **Negative keywords (20):** 虧損, 破底, 裁員, 衰退, 營收減, 減產, 看淡, 利空, 跌停, 賣超, 降評, 違約, 停工, 轉虧, 大虧, 下修, 腰斬, 營收下滑, 股價破底, 財報不佳
+- **Negative bias:** 1.3× weight on negative hits (loss aversion)
+- **Recency weighting:** 7-day linear decay (1.0→0.05)
+- **Cache:** data/news_cache.json with 4h TTL, per-stock entries
+- **Stage 2 red flag:** news score < 35 → disqualification
+- **Graceful fallback:** try/except wrapper on import, None on error (handled by Stage 2 as neutral 50)
+- **Backward compatible:** if news_sentiment module missing, pipeline continues without it
+
+### Taiwan-market Correctness:
+- Traditional Chinese keyword matching ✅
+- UDN/CBN financial news sources (Taiwan-specific) ✅
+- Loss aversion bias appropriate for retail-heavy TW market ✅
+- Stage 2 red flag threshold <35 prevents strongly negative news stocks from passing ✅
+
+### Pipeline Test Results:
+```
+✓ PIPELINE COMPLETE — 9/9 stages successful (50.0s)
+  ✓ fetch_data: 19.8s
+  ✓ stage1_screen: 1.9s (1 passed, 15 watchlist, 1343 rejected)
+  ✓ stage2_deep: 11.8s (1 passed, 0 disqualified)
+```
+
+### Dry Run Test Results:
+- test_news_sentiment.py: 39/39 PASSED ✅
+- Full suite: 119 tests passing ✅
