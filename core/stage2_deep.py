@@ -783,6 +783,14 @@ def run_stage2(date_str=None, verbose=False):
         pledge_result = check_pledge_risk(code, pledge_data, pledge_index)
         penalty_result = check_penalty_risk(code, penalty_data, penalty_index)
         
+        # Phase 31: News sentiment analysis (graceful fallback on failure)
+        try:
+            from news_sentiment import check_news_sentiment
+            news_result = check_news_sentiment(code, name, data_dir=str(data_dir))
+        except Exception as e:
+            logger.debug("Phase 31: news_sentiment import/call failed for %s: %r", code, e)
+            news_result = None
+        
         # Phase 30: Market microstructure analysis
         current_price = safe_float(candidate.get("close", 0), 0)
         vol_profile = compute_volume_profile(price_history, code, current_price=current_price)
@@ -815,6 +823,7 @@ def run_stage2(date_str=None, verbose=False):
         sh_score, sh_status = (sh_result if sh_result is not None else (None, "error"))
         pledge_score, pledge_status = (pledge_result if pledge_result is not None else (None, "error"))
         penalty_score, penalty_status = (penalty_result if penalty_result is not None else (None, "error"))
+        news_score, news_status = (news_result if news_result is not None else (None, "error"))
         
         # Phase 12: Collect diagnostics
         if div_status == "error":
@@ -837,6 +846,11 @@ def run_stage2(date_str=None, verbose=False):
             diagnostics["check_errors"]["penalties"] += 1
         elif penalty_score is not None:
             diagnostics["score_distributions"]["penalties"].append(penalty_score)
+        # Phase 31: News sentiment diagnostics
+        if news_status == "error":
+            diagnostics["check_errors"]["news_sentiment"] = diagnostics["check_errors"].get("news_sentiment", 0) + 1
+        elif news_score is not None:
+            diagnostics["score_distributions"].setdefault("news_sentiment", []).append(news_score)
         
         # === RED FLAG DISQUALIFICATION ===
         # FIX v2: Actually enforce red flags
@@ -854,6 +868,10 @@ def run_stage2(date_str=None, verbose=False):
             # Negative announcements: score < 30 means serious issues
             if ann_score is not None and ann_score < 30:
                 red_flags.append(f"Negative announcements (score={ann_score}, status={ann_status})")
+
+            # Phase 31: Strongly negative news sentiment = disqualify
+            if news_score is not None and news_score < 35:
+                red_flags.append(f"Very negative news sentiment (score={news_score}, status={news_status})")
         
         if red_flags:
             result = {
@@ -867,7 +885,8 @@ def run_stage2(date_str=None, verbose=False):
                     "announcements": {"score": ann_score, "status": ann_status},
                     "shareholders": {"score": sh_score, "status": sh_status},
                     "pledge": {"score": pledge_score, "status": pledge_status},
-                    "penalties": {"score": penalty_score, "status": penalty_status}
+                    "penalties": {"score": penalty_score, "status": penalty_status},
+                    "news_sentiment": {"score": news_score, "status": news_status}
                 },
                 "microstructure": {
                     "volume_profile": vol_profile,
@@ -882,18 +901,20 @@ def run_stage2(date_str=None, verbose=False):
         # Weighted Stage 2 score — load from config, fall back to hardcoded defaults
         # Replace None scores with neutral 50 (not 0 or 25) to avoid distorting the average
         stage2_weights = weights.get("stage2", {})
-        w_div = stage2_weights.get("dividend", 0.25)
-        w_ann = stage2_weights.get("announcements", 0.20)
-        w_sh  = stage2_weights.get("shareholders", 0.15)
-        w_plg = stage2_weights.get("pledge", 0.20)
-        w_pen = stage2_weights.get("penalties", 0.20)
+        w_div = stage2_weights.get("dividend", 0.22)
+        w_ann = stage2_weights.get("announcements", 0.18)
+        w_sh  = stage2_weights.get("shareholders", 0.13)
+        w_plg = stage2_weights.get("pledge", 0.18)
+        w_pen = stage2_weights.get("penalties", 0.18)
+        w_news = stage2_weights.get("news_sentiment", 0.11)  # Phase 31
         _safe = lambda s: s if s is not None else 50.0
         fundamental_score = (
             _safe(div_score) * w_div +
             _safe(ann_score) * w_ann +
             _safe(sh_score) * w_sh +
             _safe(pledge_score) * w_plg +
-            _safe(penalty_score) * w_pen
+            _safe(penalty_score) * w_pen +
+            _safe(news_score) * w_news  # Phase 31
         )
         
         result = {
@@ -906,7 +927,8 @@ def run_stage2(date_str=None, verbose=False):
                 "announcements": {"score": ann_score, "status": ann_status},
                 "shareholders": {"score": sh_score, "status": sh_status},
                 "pledge": {"score": pledge_score, "status": pledge_status},
-                "penalties": {"score": penalty_score, "status": penalty_status}
+                "penalties": {"score": penalty_score, "status": penalty_status},
+                "news_sentiment": {"score": news_score, "status": news_status}  # Phase 31
             },
             "microstructure": {
                 "volume_profile": vol_profile,
