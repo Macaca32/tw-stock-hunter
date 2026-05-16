@@ -11,9 +11,12 @@ FIX v3:
 """
 
 import json
+import logging
 import math
 from datetime import datetime
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # FIX v3: Import corporate action handler for ex-dividend awareness
 try:
@@ -181,11 +184,61 @@ def assess_global_risk(prices, corp_handler=None):
         return "moderate"
 
 
-def detect_regime_raw(prices, config, corp_handler=None):
+def _apply_cross_asset_override(raw_regime, cross_asset_context):
+    """Phase 34: Apply cross-asset context as an override to the raw regime.
+
+    Cross-asset data (VIX, USD/TWD, HSI) can shift the regime by one tier
+    when the signal is strong enough. This is the 6th regime input alongside
+    the existing 5 (ratio_50, ratio_150, ratio_300, volatility, breadth).
+
+    Rules:
+    - If cross_asset_signal < -0.15 (strong bearish cross-asset):
+      shift regime one tier worse (normal→caution, caution→stress, etc.)
+    - If cross_asset_signal > +0.15 (strong bullish cross-asset):
+      shift regime one tier better (stress→caution, caution→normal)
+    - Otherwise: no override
+
+    BLACK_SWAN is never overridden upward.
+    """
+    if not cross_asset_context:
+        return raw_regime
+
+    signal = cross_asset_context.get("cross_asset_signal", 0.0)
+    if abs(signal) < 0.15:
+        return raw_regime
+
+    # Tier ordering (worst to best)
+    tiers = ["black_swan", "crisis", "stress", "caution", "normal"]
+
+    if raw_regime not in tiers:
+        return raw_regime
+
+    idx = tiers.index(raw_regime)
+
+    if signal < -0.15 and idx > 0:
+        # Bearish cross-asset: shift one tier worse
+        new_regime = tiers[idx - 1]
+        # Never override upward from black_swan
+        if new_regime == "black_swan":
+            return raw_regime  # Don't auto-promote to black_swan from cross-asset alone
+        return new_regime
+    elif signal > +0.15 and idx < len(tiers) - 1:
+        # Bullish cross-asset: shift one tier better
+        # But never improve away from black_swan via cross-asset alone
+        if raw_regime == "black_swan":
+            return raw_regime
+        return tiers[idx + 1]
+
+    return raw_regime
+
+
+def detect_regime_raw(prices, config, corp_handler=None, cross_asset_context=None):
     """Detect raw regime signal without transition logic.
     
     Phase 3: Tiered regime system (NORMAL→CAUTION→STRESS→CRISIS→BLACK_SWAN).
     Uses 50/150/300-day SMAs for proper cycle coverage.
+    Phase 34: cross_asset_context is the optional 6th regime input alongside
+    TAIEX price analysis (ratio_50, ratio_150, ratio_300, volatility, breadth).
     Returns: raw regime string
     """
     if not prices:
@@ -245,40 +298,52 @@ def detect_regime_raw(prices, config, corp_handler=None):
     breadth = calc_market_breadth(prices, lookback=20)
     
     # === PHASE 3: TIERED REGIME SYSTEM ===
+    # Determine base regime from TAIEX price analysis first,
+    # then apply Phase 34 cross-asset context as the 6th input.
+
     # BLACK_SWAN: extreme conditions, immediate action required
     if breadth < 0.20 and vol > 0.04:
-        return "black_swan"
-    if vol > 0.05:  # Single-day panic
-        return "black_swan"
-    
+        base_regime = "black_swan"
+    elif vol > 0.05:  # Single-day panic
+        base_regime = "black_swan"
+
     # CRISIS: severe deterioration
-    if global_risk == "extreme" and ratio_50 < 0.25:
-        return "crisis"
-    if breadth < 0.25 and vol > 0.03:
-        return "crisis"
-    if ratio_50 < 0.25 and ratio_150 < 0.30:
-        return "crisis"
-    
+    elif global_risk == "extreme" and ratio_50 < 0.25:
+        base_regime = "crisis"
+    elif breadth < 0.25 and vol > 0.03:
+        base_regime = "crisis"
+    elif ratio_50 < 0.25 and ratio_150 < 0.30:
+        base_regime = "crisis"
+
     # STRESS: elevated risk but not yet crisis
-    if ratio_50 < 0.35 and ratio_150 < 0.40:
-        return "stress"
-    if global_risk == "high" and ratio_50 < 0.45:
-        return "stress"
-    if vol > 0.030 and ratio_50 < 0.45:
-        return "stress"
-    
+    elif ratio_50 < 0.35 and ratio_150 < 0.40:
+        base_regime = "stress"
+    elif global_risk == "high" and ratio_50 < 0.45:
+        base_regime = "stress"
+    elif vol > 0.030 and ratio_50 < 0.45:
+        base_regime = "stress"
+
     # CAUTION: mixed signals, reduced positions
-    if ratio_50 < 0.50:
-        return "caution"
-    if vol > 0.022 and ratio_50 < 0.55:
-        return "caution"
-    
+    elif ratio_50 < 0.50:
+        base_regime = "caution"
+    elif vol > 0.022 and ratio_50 < 0.55:
+        base_regime = "caution"
+
     # NORMAL: healthy market conditions
-    if ratio_50 > 0.6 and ratio_150 > 0.5:
-        return "normal"
-    
+    elif ratio_50 > 0.6 and ratio_150 > 0.5:
+        base_regime = "normal"
+
     # Default to caution for borderline cases
-    return "caution"
+    else:
+        base_regime = "caution"
+
+    # === PHASE 34: CROSS-ASSET CONTEXT OVERRIDE ===
+    # Apply cross-asset signal as 6th input to shift regime by one tier
+    # when the cross-asset signal is strong enough (< -0.15 or > +0.15)
+    if cross_asset_context is not None:
+        return _apply_cross_asset_override(base_regime, cross_asset_context)
+
+    return base_regime
 
 
 def apply_transition_logic(raw_regime, prev_regime_data, config):
@@ -318,11 +383,14 @@ def apply_transition_logic(raw_regime, prev_regime_data, config):
     return raw_regime, days_in_regime + 1
 
 
-def detect_regime(date_str=None, verbose=False):
+def detect_regime(date_str=None, verbose=False, cross_asset_context=None):
     """Detect current market regime using TWSE data only.
     
     FIX v3: With transition logic, NO_TRADE state, data quality checks,
     and corporate action awareness (ex-dividend date handling).
+    Phase 34: cross_asset_context is an optional 6th regime input that
+    can shift the raw regime by one tier based on VIX, USD/TWD, HSI signals.
+    If None, no cross-asset adjustment is applied (backward compatible).
     """
     data_dir = Path(__file__).parent.parent / "data"
     
@@ -384,8 +452,21 @@ def detect_regime(date_str=None, verbose=False):
         with open(config_file, 'r') as f:
             config = json.load(f)
     
-    # Get raw regime signal
-    raw_regime = detect_regime_raw(prices, config, corp_handler=corp_handler)
+    # Phase 34: Fetch cross-asset context if not provided
+    cross_asset_info = None
+    if cross_asset_context is None:
+        try:
+            from market_context import get_market_context
+            ctx = get_market_context(date_str=date_str)
+            cross_asset_info = ctx
+        except Exception as e:
+            logger.debug("Phase 34: cross-asset context auto-fetch failed: %s", e)
+    else:
+        cross_asset_info = cross_asset_context
+
+    # Get raw regime signal (with cross-asset context as 6th input)
+    raw_regime = detect_regime_raw(prices, config, corp_handler=corp_handler,
+                                   cross_asset_context=cross_asset_info)
     
     # Apply transition logic
     regime, days_in_regime = apply_transition_logic(raw_regime, prev_regime, config)
@@ -410,11 +491,12 @@ def detect_regime(date_str=None, verbose=False):
         "confidence": confidence,
         "timestamp": datetime.now().isoformat(),
         "stocks_analyzed": len(prices),
-        "max_data_days": max_history_days
+        "max_data_days": max_history_days,
+        "cross_asset_context": cross_asset_info,  # Phase 34
     }
     
     if verbose:
-        print(f"🔍 Market Regime: {regime}")
+        print(f"\U0001f50d Market Regime: {regime}")
         print(f"   Raw signal: {raw_regime}")
         print(f"   Days in regime: {days_in_regime}")
         print(f"   Volatility: {volatility:.4f}")
@@ -422,6 +504,9 @@ def detect_regime(date_str=None, verbose=False):
         print(f"   Data quality: {data_quality} (confidence: {confidence})")
         print(f"   Stocks analyzed: {len(prices)}")
         print(f"   Max data days: {max_history_days}")
+        if cross_asset_info:
+            sig = cross_asset_info.get("cross_asset_signal", 0.0)
+            print(f"   Cross-asset signal: {sig:+.4f}")
     
     return result
 
@@ -480,7 +565,8 @@ def get_regime_position_mult(regime):
     return mult_map.get(regime, 0.0)
 
 
-def detect_regime_from_prices(prices, prev_regime_data=None, config=None):
+def detect_regime_from_prices(prices, prev_regime_data=None, config=None,
+                              cross_asset_context=None):
     """Detect market regime from pre-loaded price data.
 
     Phase 17: New entry point for backtest and paper_trader use.
@@ -488,12 +574,17 @@ def detect_regime_from_prices(prices, prev_regime_data=None, config=None):
     pre-filtered price data — essential for avoiding look-ahead bias
     in backtests where only data on or before date_str should be used.
 
+    Phase 34: cross_asset_context is an optional 6th regime input.
+    If None, no cross-asset adjustment is applied (backward compatible).
+    Backtests typically pass None to avoid look-ahead bias from live data.
+
     Args:
         prices: Dict {stock_code: [price_entries]} — already filtered to
                 the cutoff date by the caller.
         prev_regime_data: Previous regime dict (for transition logic).
                           If None, transition logic is skipped.
         config: Regime rules config dict. If None, loaded from file.
+        cross_asset_context: Optional dict from get_market_context().
 
     Returns:
         Regime string: 'normal', 'caution', 'stress', 'crisis', 'black_swan', or 'unknown'
@@ -519,8 +610,9 @@ def detect_regime_from_prices(prices, prev_regime_data=None, config=None):
     except (ImportError, Exception):
         pass
 
-    # Get raw regime signal from the provided prices
-    raw_regime = detect_regime_raw(prices, config, corp_handler=corp_handler)
+    # Get raw regime signal from the provided prices (with cross-asset context)
+    raw_regime = detect_regime_raw(prices, config, corp_handler=corp_handler,
+                                   cross_asset_context=cross_asset_context)
 
     # Apply transition logic if previous regime data is available
     if prev_regime_data is not None:
