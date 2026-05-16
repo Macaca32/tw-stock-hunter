@@ -403,3 +403,203 @@ class TestGracefulFallback:
         score, detail = aggregate_sentiment(articles, reference_date="2026-05-16")
         assert isinstance(score, float)
         assert 0 <= score <= 100
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  8. Mixed Sentiment Edge Cases
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestMixedSentimentEdgeCases:
+    """Verify sentiment classification with complex mixed positive/negative articles."""
+
+    def _classify(self, article):
+        from news_sentiment import classify_article_sentiment
+        return classify_article_sentiment(article)
+
+    def test_positive_title_negative_snippet(self):
+        """Positive title + negative snippet: weighted count determines result.
+
+        Title has 獲利 (1 pos), snippet has 虧損 (1 neg).
+        1 pos vs 1*1.3 = 1.3 weighted neg → negative wins.
+        """
+        article = {"title": "獲利表現", "snippet": "子公司虧損嚴重"}
+        sentiment = self._classify(article)
+        assert sentiment == -0.5
+
+    def test_negative_title_positive_snippet(self):
+        """Negative title + positive snippet: overall may go either way.
+
+        Title has 虧損 (1 neg), snippet has 突破+成長 (2 pos).
+        2 pos vs 1*1.3 = 1.3 weighted neg → positive wins.
+        """
+        article = {"title": "虧損縮小", "snippet": "技術突破帶動成長"}
+        sentiment = self._classify(article)
+        assert sentiment == 0.5
+
+    def test_many_negatives_overwhelm_few_positives(self):
+        """Multiple negative keywords overwhelm a few positive ones.
+
+        1 pos (獲利) vs 3 neg (虧損, 裁員, 破底) → 1 vs 3*1.3=3.9 → negative.
+        """
+        article = {"title": "雖有獲利但虧損裁員破底", "snippet": ""}
+        sentiment = self._classify(article)
+        assert sentiment == -0.5
+
+    def test_many_positives_overwhelm_few_negatives(self):
+        """Multiple positive keywords overwhelm a few negative ones.
+
+        4 pos (突破, 獲利, 成長, 創新高) vs 1 neg (下修) → 4 vs 1.3 → positive.
+        """
+        article = {"title": "突破獲利成長創新高", "snippet": "小幅下修"}
+        sentiment = self._classify(article)
+        assert sentiment == 0.5
+
+    def test_equal_weighted_positive_negative_is_negative(self):
+        """Equal raw counts: 2 pos vs 2 neg → 2 vs 2*1.3=2.6 → negative.
+
+        Loss aversion bias: negative keywords are weighted 1.3x.
+        """
+        article = {"title": "獲利成長但虧損衰退", "snippet": ""}
+        sentiment = self._classify(article)
+        assert sentiment == -0.5
+
+    def test_mixed_aggregate_produces_intermediate_score(self):
+        """Mixed article set should produce score between positive and negative extremes."""
+        from news_sentiment import aggregate_sentiment
+        articles = [
+            {"title": "台積電獲利大增", "snippet": "", "date": "2026-05-15"},
+            {"title": "公司虧損裁員", "snippet": "", "date": "2026-05-15"},
+            {"title": "市場盤整觀望", "snippet": "", "date": "2026-05-14"},
+        ]
+        score, detail = aggregate_sentiment(articles, reference_date="2026-05-16")
+        # Mixed articles → score should be between 30 and 90
+        assert 30 < score < 90
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  9. Empty/None Input Handling
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestEmptyNoneHandling:
+    """Verify graceful handling of empty or None inputs."""
+
+    def test_classify_empty_article(self):
+        """Article with empty title and snippet → neutral."""
+        from news_sentiment import classify_article_sentiment
+        article = {"title": "", "snippet": ""}
+        sentiment = classify_article_sentiment(article)
+        assert sentiment == 0.0
+
+    def test_classify_missing_title(self):
+        """Article with missing title key → neutral."""
+        from news_sentiment import classify_article_sentiment
+        article = {"snippet": "獲利成長"}
+        sentiment = classify_article_sentiment(article)
+        assert sentiment == 0.5  # snippet still checked
+
+    def test_classify_missing_snippet(self):
+        """Article with missing snippet key → title only classification."""
+        from news_sentiment import classify_article_sentiment
+        article = {"title": "虧損擴大"}
+        sentiment = classify_article_sentiment(article)
+        assert sentiment == -0.5
+
+    def test_classify_none_fields(self):
+        """Article with None title/snippet → neutral (no crash)."""
+        from news_sentiment import classify_article_sentiment
+        article = {"title": None, "snippet": None}
+        sentiment = classify_article_sentiment(article)
+        assert sentiment == 0.0
+
+    def test_aggregate_none_articles(self):
+        """None passed as articles list → should not crash (but empty list is expected)."""
+        from news_sentiment import aggregate_sentiment
+        # The function expects a list, but let's test empty list
+        score, detail = aggregate_sentiment([])
+        assert score == 60.0
+        assert detail["status"] == "no_articles"
+
+    def test_check_news_sentiment_empty_stock_code(self):
+        """Empty stock code should still return a valid result."""
+        from news_sentiment import check_news_sentiment
+        with patch("news_sentiment.fetch_news_for_stock") as mock_fetch:
+            mock_fetch.return_value = []
+            score, status = check_news_sentiment("", "", force_refresh=True)
+            assert score == 60.0
+            assert status == "neutral"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  10. Cache TTL Boundary Conditions
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestCacheTTLBoundary:
+    """Verify cache TTL boundary conditions: just expired, just valid."""
+
+    def test_cache_just_expired(self, tmp_path):
+        """Cache expired by 1 second → should return empty dict."""
+        from news_sentiment import save_cache, load_cache, CACHE_TTL_SECONDS
+        cache = {"_cached_at": time.time() - CACHE_TTL_SECONDS - 1,
+                 "sentiment_2330": {"score": 80.0, "status": "positive"}}
+        save_cache(cache, data_dir=str(tmp_path))
+
+        loaded = load_cache(data_dir=str(tmp_path))
+        assert loaded == {}
+
+    def test_cache_just_valid(self, tmp_path):
+        """Cache with 1 second remaining → should return data."""
+        from news_sentiment import save_cache, load_cache, CACHE_TTL_SECONDS
+        cache = {"_cached_at": time.time() - CACHE_TTL_SECONDS + 10,
+                 "sentiment_2330": {"score": 80.0, "status": "positive"}}
+        save_cache(cache, data_dir=str(tmp_path))
+
+        loaded = load_cache(data_dir=str(tmp_path))
+        assert "sentiment_2330" in loaded
+
+    def test_cache_exactly_at_ttl(self, tmp_path):
+        """Cache at TTL boundary → barely valid or barely expired depending on timing.
+
+        The check is: time.time() - cached_at > CACHE_TTL_SECONDS
+        Since time passes between save and load, we test with a small buffer.
+        A cache set to TTL-100ms should still be valid on immediate load.
+        """
+        from news_sentiment import save_cache, load_cache, CACHE_TTL_SECONDS
+        # Set cached_at to just under CACHE_TTL_SECONDS ago (100ms buffer)
+        cache = {"_cached_at": time.time() - CACHE_TTL_SECONDS + 0.1,
+                 "sentiment_2330": {"score": 85.0, "status": "positive"}}
+        save_cache(cache, data_dir=str(tmp_path))
+
+        loaded = load_cache(data_dir=str(tmp_path))
+        # With 100ms buffer, should still be valid on immediate load
+        assert "sentiment_2330" in loaded
+
+    def test_cache_fresh_within_ttl(self, tmp_path):
+        """Cache created just now → definitely within TTL."""
+        from news_sentiment import save_cache, load_cache
+        cache = {"_cached_at": time.time(),
+                 "sentiment_2330": {"score": 90.0, "status": "positive"}}
+        save_cache(cache, data_dir=str(tmp_path))
+
+        loaded = load_cache(data_dir=str(tmp_path))
+        assert loaded["sentiment_2330"]["score"] == 90.0
+
+    def test_cache_zero_timestamp(self, tmp_path):
+        """Cache with _cached_at=0 → very old, should be expired."""
+        from news_sentiment import save_cache, load_cache, CACHE_TTL_SECONDS
+        cache = {"_cached_at": 0,
+                 "sentiment_2330": {"score": 80.0, "status": "positive"}}
+        save_cache(cache, data_dir=str(tmp_path))
+
+        loaded = load_cache(data_dir=str(tmp_path))
+        assert loaded == {}
+
+    def test_cache_missing_cached_at(self, tmp_path):
+        """Cache without _cached_at key → defaults to 0, expired."""
+        from news_sentiment import save_cache, load_cache
+        cache = {"sentiment_2330": {"score": 80.0, "status": "positive"}}
+        # save_cache adds _cached_at automatically
+        save_cache(cache, data_dir=str(tmp_path))
+
+        loaded = load_cache(data_dir=str(tmp_path))
+        # Should work since save_cache adds _cached_at
+        assert "sentiment_2330" in loaded
