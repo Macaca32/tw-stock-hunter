@@ -942,15 +942,39 @@ def run_stage1(date_str=None, verbose=False):
     margin_data = datasets.get("margin", [])
     
     # Load price history if available
+    # Phase 25: Try SQLite batch query first for efficiency, fall back to JSON
     price_history = None
-    history_file = Path(__file__).parent.parent / "data" / "price_history.json"
-    if history_file.exists():
+    data_dir = Path(__file__).parent.parent / "data"
+    db_path = data_dir / "hunter.db"
+
+    if db_path.exists():
         try:
-            with open(history_file, 'r', encoding='utf-8') as f:
-                price_history = json.load(f)
-            logger.info("Price history loaded: %d stocks", len(price_history))
-        except:
-            pass
+            from datastore import get_daily_history_batch
+            # Get all stock codes from daily data for batch lookup
+            stock_codes = [get_field(s, "證券代號", "Code", "") for s in daily_data]
+            stock_codes = [c for c in stock_codes if c]  # filter empty
+            if stock_codes:
+                raw_history = get_daily_history_batch(
+                    stock_codes, limit=30, data_dir=str(data_dir)
+                )
+                # Convert to price_history format: {stock_id: [entries]}
+                # SQLite returns {stock_id: [{date, open, high, low, close, volume, adj_close, adj_volume}]}
+                # which matches the format expected by check_hard_filters and score_technical_momentum
+                price_history = raw_history
+                logger.info("Price history loaded from SQLite: %d stocks", len(price_history))
+        except Exception as e:
+            logger.debug("SQLite price history load failed, falling back to JSON: %s", e)
+            price_history = None
+
+    if price_history is None:
+        history_file = data_dir / "price_history.json"
+        if history_file.exists():
+            try:
+                with open(history_file, 'r', encoding='utf-8') as f:
+                    price_history = json.load(f)
+                logger.info("Price history loaded from JSON: %d stocks", len(price_history))
+            except:
+                pass
     
     # Load regime if available
     regime = "unknown"
