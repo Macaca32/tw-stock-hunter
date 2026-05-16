@@ -86,3 +86,50 @@ All fixes approved. Key Taiwan-market correctness verified:
 - **Note:** Stage1 output file not saved to disk despite successful run. Separate pre-existing bug, unrelated to Phase 24.
 
 ### Dry Run Test: PASSED ✅ (all 80 tests)
+
+## Phase 25 Complete (2026-05-16) — Pipeline Integration + SQLite Data Layer
+**Commits:** `3650f14`, `80682ac`, `10719ff`, `69eebd5`, `2b1b1f4`
+
+### Task #A: Stage1 Output Bug Fix ✅
+- **Bug:** Pipeline failed at stage2_deep with "No such file or directory: data/stage1_YYYY-MM-DD.json"
+- **Root cause:** `save_stage1_results()` was only called in CLI main(), not when run via pipeline orchestrator
+- **Fix:** Added `save_stage1_results(output)` call at end of `run_stage1()` before returning
+- **Review:** Simple, correct fix. Stage2_deep now receives stage1 data as expected ✅
+
+### Task #B: SQLite Pipeline Integration ✅
+- New pipeline stage: `db_migrate` (runs after regime detection)
+- Migrate JSON data to SQLite for SQL-based queries instead of file reads
+- **Stage1 changes:** Price history batch lookup via SQLite (`get_daily_history_batch`) with JSON fallback
+- **Stage2 changes:** Stage1 results loaded from SQLite first, falls back to JSON
+- **New table:** `stage1_results` (run_date + stock_id composite PK, per-dimension scores)
+- **Schema version:** Bumped to 2 ✅
+- **Review:** Clean backward-compatible integration. All fallbacks tested and working ✅
+
+### Task #C: None-Safe Data Access Fix ✅
+- **Bug:** Pipeline crashed with `TypeError: '>' not supported between instances of 'NoneType' and 'int'`
+- **Root cause:** SQLite returns NULL → Python None for missing columns; nested `.get(key, default)` doesn't use default when key exists but value is None
+- **Fix:** Replaced 7 locations in stage1_screen.py with `h.get("adj_close") or h.get("close") or 0` pattern
+- Also fixed `get_field()` helper to use same pattern
+- **Review:** Comprehensive fix covering all affected code paths. Taiwan-market data often has NULL adjusted values ✅
+
+### Noise Cleanup ✅
+- Removed `/skills/` (49 dirs, ~126K lines) — Z.ai agent template files, not project-related
+- Removed `.env`, `download/README.md` — local environment noise
+- Added to `.gitignore` to prevent future contamination
+
+### Pipeline Test Results:
+```
+✓ PIPELINE COMPLETE — 9/9 stages successful (42.3s)
+  ✓ fetch_data: 24.0s
+  ✓ validate_ingested_data: 0.2s
+  ✓ fetch_history: 6.4s
+  ✓ detect_regime: 1.4s
+  ✓ db_migrate: 6.0s (SQLite migration)
+  ✓ stage1_screen: 1.9s (63 passed, 73 watchlist, 1223 rejected)
+  ✓ stage2_deep: 0.1s (62 passed, 0 disqualified) — FIRST FULL SUCCESS
+  ✓ paper_trader: 1.1s
+  ✓ telegram_alerts: 0.0s
+```
+- **Milestone:** Full pipeline runs end-to-end for first time! ✅
+
+### Dry Run Test: PASSED ✅ (all 80 tests)
