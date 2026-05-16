@@ -1196,6 +1196,72 @@ def compute_signal_confidence(stock_code, scores, price_history=None,
     return confidence
 
 
+def get_regime_adjusted_thresholds(regime, base_thresholds):
+    """Phase 27: Adjust pass/fail thresholds dynamically based on market regime.
+
+    Regime-aware thresholds ensure only the strongest signals survive
+    in adverse market conditions:
+    - NORMAL/CAUTION: Standard thresholds (no adjustment)
+    - STRESS: Raise minimum score by 15 points
+    - CRISIS: Require exceptional scores (>80)
+    - BLACK_SWAN: Pause screening entirely (effectively impossible threshold)
+
+    Args:
+        regime: Current market regime string
+        base_thresholds: Dict with 'pass_threshold' and 'watchlist_threshold'
+
+    Returns:
+        Adjusted thresholds dict with same keys plus 'regime_adjustment' metadata.
+    """
+    base_pass = base_thresholds.get("pass_threshold", 60)
+    base_watch = base_thresholds.get("watchlist_threshold", 45)
+
+    if regime in ("normal", "caution", "unknown"):
+        # Standard thresholds — no adjustment
+        return {
+            "pass_threshold": base_pass,
+            "watchlist_threshold": base_watch,
+            "regime_adjustment": 0,
+            "regime_note": f"Standard thresholds ({regime})",
+        }
+    elif regime == "stress":
+        # Raise by 15 points — only strongest signals survive
+        adjusted_pass = min(100, base_pass + 15)
+        adjusted_watch = min(100, base_watch + 15)
+        return {
+            "pass_threshold": adjusted_pass,
+            "watchlist_threshold": adjusted_watch,
+            "regime_adjustment": 15,
+            "regime_note": "Stress regime: thresholds raised +15pts",
+        }
+    elif regime == "crisis":
+        # Require exceptional scores (>80)
+        adjusted_pass = max(base_pass, 80)
+        adjusted_watch = max(base_watch, 65)
+        return {
+            "pass_threshold": adjusted_pass,
+            "watchlist_threshold": adjusted_watch,
+            "regime_adjustment": adjusted_pass - base_pass,
+            "regime_note": "Crisis regime: exceptional scores required (>80)",
+        }
+    elif regime == "black_swan":
+        # Pause screening — effectively impossible threshold
+        return {
+            "pass_threshold": 100,  # Unreachable
+            "watchlist_threshold": 95,
+            "regime_adjustment": 100 - base_pass,
+            "regime_note": "BLACK SWAN: screening paused (no new positions)",
+        }
+    else:
+        # Unknown regime — use standard thresholds
+        return {
+            "pass_threshold": base_pass,
+            "watchlist_threshold": base_watch,
+            "regime_adjustment": 0,
+            "regime_note": f"Unknown regime '{regime}': using standard thresholds",
+        }
+
+
 def _validate_candidates(candidates, verbose=True):
     """Phase 9: Validate Stage 1 candidates via Pydantic schema.
     
@@ -1338,7 +1404,14 @@ def run_stage1(date_str=None, verbose=False):
     logger.info("Stage 1: Screening %d stocks", len(daily_data))
     logger.info("Pass threshold: %s", thresholds['stage1']['pass_threshold'])
     logger.info("Watchlist threshold: %s", thresholds['stage1']['watchlist_threshold'])
-    
+
+    # Phase 27: Adjust thresholds based on current market regime
+    adjusted_thresholds = get_regime_adjusted_thresholds(regime, thresholds['stage1'])
+    effective_pass = adjusted_thresholds['pass_threshold']
+    effective_watch = adjusted_thresholds['watchlist_threshold']
+    logger.info("Regime-adjusted thresholds: pass=%d, watch=%d (%s)",
+                effective_pass, effective_watch, adjusted_thresholds['regime_note'])
+
     for stock in daily_data:
         # Daily data uses English keys
         code = get_field(stock, "證券代號", "Code", "")
@@ -1400,12 +1473,12 @@ def run_stage1(date_str=None, verbose=False):
             "score_breakdown": scores,
             "signal_strength": signal_strength,
             "signal_confidence": signal_confidence,
-            "pass": composite >= thresholds["stage1"]["pass_threshold"]
+            "pass": composite >= effective_pass
         }
         
-        if composite >= thresholds["stage1"]["pass_threshold"]:
+        if composite >= effective_pass:
             candidates.append(result)
-        elif composite >= thresholds["stage1"]["watchlist_threshold"]:
+        elif composite >= effective_watch:
             watchlist.append(result)
         else:
             rejected.append(result)
@@ -1421,6 +1494,8 @@ def run_stage1(date_str=None, verbose=False):
         "stage": 1,
         "date": date,
         "timestamp": datetime.now().isoformat(),
+        "regime": regime,
+        "regime_adjusted_thresholds": adjusted_thresholds,
         "candidates": valid_candidates,
         "watchlist": watchlist,
         "rejected_count": len(rejected),

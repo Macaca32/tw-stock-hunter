@@ -13,6 +13,7 @@ from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
 from stage1_screen import load_data, load_config, safe_float, get_field
+from stage1_screen import get_regime_adjusted_thresholds
 import math
 
 logger = logging.getLogger(__name__)
@@ -397,7 +398,18 @@ def run_stage2(date_str=None, verbose=False):
     logger.info("Stage 2: Deep-diving %d candidates", len(candidates))
     logger.info("Stage 2 min score: %s", thresholds['stage2']['fundamental_score_min'])
     logger.info("Red flag disqualification: %s", thresholds['stage2'].get('red_flag_disqualify', True))
-    
+
+    # Phase 27: Adjust stage2 thresholds based on market regime
+    regime = stage1_results.get("regime", "unknown")
+    stage2_base = {
+        "pass_threshold": thresholds['stage2']['fundamental_score_min'],
+        "watchlist_threshold": thresholds['stage2'].get('watchlist_min', 50),
+    }
+    adjusted_s2 = get_regime_adjusted_thresholds(regime, stage2_base)
+    effective_s2_min = adjusted_s2['pass_threshold']
+    logger.info("Regime-adjusted Stage 2 min score: %d (%s)",
+                effective_s2_min, adjusted_s2['regime_note'])
+
     deep_results = []
     disqualified = []
     
@@ -525,7 +537,7 @@ def run_stage2(date_str=None, verbose=False):
             "combined_score": round((stage1_score * 0.6 + fundamental_score * 0.4), 1)
         }
         
-        if fundamental_score >= thresholds["stage2"]["fundamental_score_min"]:
+        if fundamental_score >= effective_s2_min:
             deep_results.append(result)
     
     # Phase 12: Compute score distribution stats from collected distributions
@@ -548,6 +560,8 @@ def run_stage2(date_str=None, verbose=False):
         "stage": 2,
         "date": date,
         "timestamp": datetime.now().isoformat(),
+        "regime": regime,
+        "regime_adjusted_thresholds": adjusted_s2,
         "candidates": deep_results,
         "disqualified": disqualified,
         "summary": {
