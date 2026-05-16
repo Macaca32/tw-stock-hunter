@@ -2,7 +2,7 @@
 """
 Pipeline Runner — Orchestrates the full tw-stock-hunter pipeline
 
-Chains: fetch_data → fetch_history → detect_regime → db_migrate → stage1_screen → stage2_deep → paper_trader → telegram_alerts → report_generator
+Chains: fetch_data → fetch_history → detect_regime → db_migrate → stage1_screen → stage2_deep → paper_trader → telegram_alerts → report_generator → signal_fusion
 
 Usage:
     python run_pipeline.py                       # Run for today
@@ -304,6 +304,27 @@ def run_pipeline(date_str=None, verbose=False):
         html_ok = "✓" if report_result.get("html_generated") else "✗"
         print(f"   Report: MD {md_ok} | HTML {html_ok}")
 
+    # ── Stage 11: Signal Fusion Ensemble ────────────────────────────────
+    # Phase 37: Combine all scoring dimensions into unified probability
+    # of outperformance. Takes stage2 results + market_context + risk_manager
+    # output. Produces data/ensemble_YYYY-MM-DD.json. Backward compatible —
+    # skips gracefully if any upstream dimension is missing.
+    from signal_fusion import run_signal_fusion
+
+    ensemble_result = _run_stage(
+        "signal_fusion",
+        lambda **kw: run_signal_fusion(date_str=date_str, verbose=verbose),
+        result,
+        verbose=verbose,
+    )
+    if verbose and ensemble_result:
+        ensemble_summary = ensemble_result.get("summary", {})
+        n_stocks = ensemble_summary.get("total_stocks", 0)
+        avg_score = ensemble_summary.get("avg_ensemble_score", 0)
+        n_high = ensemble_summary.get("high_conviction_count", 0)
+        print(f"   Ensemble: {n_stocks} stocks scored, avg={avg_score:.3f}, "
+              f"high-conviction={n_high}")
+
     return _finalize(result, verbose)
 
 
@@ -381,6 +402,7 @@ Pipeline stages:
   7.  paper_trader    — Paper trading simulation
   8.  telegram_alerts — Send alerts (if enabled)
   10. report_generator — Generate Markdown/HTML daily reports (Phase 32)
+  11. signal_fusion   — ML ensemble fusion of all scoring dimensions (Phase 37)
 """,
     )
     parser.add_argument(
