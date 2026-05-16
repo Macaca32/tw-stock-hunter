@@ -2,7 +2,7 @@
 """
 Pipeline Runner — Orchestrates the full tw-stock-hunter pipeline
 
-Chains: fetch_data → fetch_history → detect_regime → stage1_screen → stage2_deep → paper_trader → telegram_alerts
+Chains: fetch_data → fetch_history → detect_regime → db_migrate → stage1_screen → stage2_deep → paper_trader → telegram_alerts
 
 Usage:
     python run_pipeline.py                       # Run for today
@@ -172,7 +172,22 @@ def run_pipeline(date_str=None, verbose=False):
     if verbose:
         print(f"   Regime: {regime} (confidence: {regime_data.get('confidence', '?')})")
 
-    # ── Stage 4: Stage 1 Screen ──────────────────────────────────────
+    # ── Stage 4: DB Migration ──────────────────────────────────────────
+    # Phase 25: Migrate JSON files to SQLite so downstream stages can use
+    # SQL queries instead of JSON file reads where beneficial.
+    from datastore import migrate_json_to_sqlite, save_stage1_to_sqlite
+
+    db_stats = _run_stage(
+        "db_migrate",
+        lambda **kw: migrate_json_to_sqlite(data_dir=str(DATA_DIR), verbose=verbose),
+        result,
+        verbose=verbose,
+    )
+    if verbose and db_stats:
+        total_inserted = sum(v for k, v in db_stats.items() if k.endswith("_inserted"))
+        print(f"   DB migration: {total_inserted} rows inserted")
+
+    # ── Stage 5: Stage 1 Screen ──────────────────────────────────────
     from stage1_screen import run_stage1
 
     s1_output = _run_stage(
@@ -184,6 +199,9 @@ def run_pipeline(date_str=None, verbose=False):
     if s1_output is None:
         return _finalize(result, verbose)
 
+    # Phase 25: Also persist stage1 results to SQLite for SQL-based lookups
+    save_stage1_to_sqlite(s1_output, data_dir=str(DATA_DIR))
+
     s1_summary = s1_output.get("summary", {})
     n_passed_s1 = s1_summary.get("passed", 0)
     n_watchlist = s1_summary.get("watchlist", 0)
@@ -191,7 +209,7 @@ def run_pipeline(date_str=None, verbose=False):
     if verbose:
         print(f"   Screened: {n_passed_s1} passed, {n_watchlist} watchlist, {n_rejected} rejected")
 
-    # ── Stage 5: Stage 2 Deep-Dive ───────────────────────────────────
+    # ── Stage 6: Stage 2 Deep-Dive ───────────────────────────────────
     from stage2_deep import run_stage2, save_stage2_results
 
     s2_output = _run_stage(
@@ -327,10 +345,11 @@ Pipeline stages:
   1. fetch_data      — Fetch TWSE data (daily, PE, revenue, etc.)
   2. fetch_history   — Build historical price data
   3. detect_regime   — Detect market regime
-  4. stage1_screen   — Quantitative pre-screen
-  5. stage2_deep     — Fundamental deep-dive
-  6. paper_trader    — Paper trading simulation
-  7. telegram_alerts — Send alerts (if enabled)
+  4. db_migrate      — Migrate JSON data to SQLite (Phase 25)
+  5. stage1_screen   — Quantitative pre-screen
+  6. stage2_deep     — Fundamental deep-dive
+  7. paper_trader    — Paper trading simulation
+  8. telegram_alerts — Send alerts (if enabled)
 """,
     )
     parser.add_argument(

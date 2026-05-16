@@ -19,9 +19,23 @@ logger = logging.getLogger(__name__)
 
 
 def load_stage1_results(date_str=None):
-    """Load Stage 1 results"""
+    """Load Stage 1 results
+    
+    Phase 25: Try SQLite first for SQL-based lookup, then fall back to JSON.
+    """
     data_dir = Path(__file__).parent.parent / "data"
     
+    # Phase 25: Try SQLite first — allows SQL queries on stage1 data
+    try:
+        from datastore import load_stage1_from_sqlite
+        result = load_stage1_from_sqlite(date_str=date_str, data_dir=str(data_dir))
+        if result is not None:
+            logger.info("Loaded stage1 results from SQLite for %s", date_str or "latest")
+            return result
+    except Exception as e:
+        logger.debug("SQLite stage1 load failed, falling back to JSON: %s", e)
+    
+    # Fallback: load from JSON file
     if date_str is None:
         json_files = sorted(data_dir.glob("stage1_*.json"))
         if not json_files:
