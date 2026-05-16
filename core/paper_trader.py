@@ -69,6 +69,31 @@ class PaperTrader:
         except Exception as e:
             logger.warning(f"regime_detector import failed: {e}")
 
+        # Phase 36: Risk Management Overlay
+        self._risk_manager_available = False
+        try:
+            from risk_manager import (
+                compute_atr_stop,
+                get_trailing_stop_config,
+                check_position_limit,
+                estimate_portfolio_var,
+                get_risk_summary,
+                pre_trade_risk_check,
+                enforce_stop_losses,
+            )
+            self._compute_atr_stop = compute_atr_stop
+            self._get_trailing_stop_config = get_trailing_stop_config
+            self._check_position_limit = check_position_limit
+            self._estimate_portfolio_var = estimate_portfolio_var
+            self._get_risk_summary = get_risk_summary
+            self._pre_trade_risk_check = pre_trade_risk_check
+            self._enforce_stop_losses = enforce_stop_losses
+            self._risk_manager_available = True
+        except ImportError:
+            logger.debug("Phase 36: risk_manager not available — risk checks skipped")
+        except Exception as e:
+            logger.warning(f"Phase 36: risk_manager import failed: {e}")
+
     def _default_config(self):
         return {
             "risk_per_trade": 0.015,  # 1.5% risk per trade
@@ -250,6 +275,37 @@ class PaperTrader:
                 # Skip this candidate - sector already has max positions
                 continue
 
+            # Phase 36: Pre-trade risk check (position limits + ATR feasibility)
+            if self._risk_manager_available and price_history:
+                portfolio_state = {
+                    "total_value": sum(
+                        t.get("entry_price", 0) * t.get("shares", 1) or t.get("value", 0)
+                        for t in self.active_positions + new_trades
+                    ),
+                    "positions": [
+                        {"stock_id": t["code"], "sector": t.get("sector", "unknown")}
+                        for t in self.active_positions + new_trades
+                    ],
+                }
+                candidate_for_risk = {
+                    "stock_id": code,
+                    "sector": sector,
+                    "value": entry_price * 100,  # rough estimate
+                    "conviction_grade": candidate.get("conviction_grade"),
+                }
+                risk_check = self._pre_trade_risk_check(portfolio_state, candidate_for_risk, price_history)
+                if not risk_check.get("allowed", True):
+                    logger.debug(
+                        "Phase 36: pre-trade blocked %s — %s",
+                        code,
+                        risk_check.get("reason_zh", "unknown"),
+                    )
+                    continue
+                # Store trailing stop config on candidate for later use
+                candidate._risk_config = risk_check
+            else:
+                candidate._risk_config = {}
+
             # FIX v2: ATR-based stop loss
             is_post_holiday, post_holiday_gap = self._is_post_holiday(date_str)
             atr_mult = self.config.get("atr_stop_mult", 2.5)
@@ -266,6 +322,12 @@ class PaperTrader:
             # Calculate take profit based on risk
             risk_per_share = entry_price - stop_loss
             take_profit = entry_price + risk_per_share * self.config["take_profit_rr"]
+
+            # Phase 36: Get trailing stop config for this position
+            conviction_grade = candidate.get("conviction_grade")
+            trail_config = {}
+            if self._risk_manager_available:
+                trail_config = self._get_trailing_stop_config(conviction_grade)
 
             trade = {
                 "trade_id": f"{code}_{date_str}",
@@ -298,6 +360,10 @@ class PaperTrader:
                 "stage2_score": candidate.get("stage2_score", 0),
                 # Phase 14: Regime-aware metadata
                 "regime_mult": round(regime_mult, 2),
+                # Phase 36: Risk management overlay
+                "conviction_grade": conviction_grade,
+                "trailing_stop_pct": trail_config.get("trailing_pct", 0.20),
+                "trailing_stop_price": None,  # Updated dynamically by enforce_stops()
             }
 
             new_trades.append(trade)
@@ -1703,6 +1769,110 @@ days would inflate holding period and trigger premature max_holding_days exits.
             "lookback_days": lookback_days,
             "correlation_threshold": correlation_threshold,
         }
+
+    def enforce_stops(self, current_prices=None):
+        """Phase 36: Check existing positions against stop-loss levels.
+
+        For each open position, checks if the current price has breached
+        the hard stop-loss or trailing stop. Exits positions that hit stops,
+        and updates trailing stop prices for winners.
+
+        Args:
+            current_prices: Optional dict mapping stock code -> latest close price.
+                If not provided, uses latest from price_history.
+
+        Returns:
+            Dict with keys:
+              - exited (list): Positions that hit stops
+              - updated (list): All positions with refreshed stop levels
+              - summary_zh (str): Traditional Chinese status report
+        """
+        if not self._risk_manager_available or not self.active_positions:
+            return {
+                "exited": [],
+                "updated": list(self.active_positions),
+                "summary_zh": "✅ 無活躍持股或風險管理模組不可用",
+            }
+
+        price_history = self.load_price_history()
+        result = self._enforce_stop_losses(
+            positions=self.active_positions,
+            price_history=price_history,
+            current_prices=current_prices,
+        )
+
+        exited = result.get("positions_to_exit", [])
+        updated = result.get("updated_positions", [])
+
+        # Close exited trades
+        for exit_pos in exited:
+            code = exit_pos.get("stock_id") or exit_pos.get("code", "")
+            for t in self.active_positions:
+                if (t.get("code") == code) and ("stock_id" not in exit_pos or t.get("code") == exit_pos.get("stock_id")):
+                    t["status"] = "closed"
+                    t["exit_price"] = exit_pos.get("exit_price", t.get("entry_price", 0))
+                    t["pnl_pct"] = exit_pos.get("pnl_pct")
+                    t["exit_reason"] = exit_pos.get("signal", "stop_loss")
+                    if "stock_id" in exit_pos:
+                        t["stock_id"] = exit_pos["stock_id"]
+
+        # Update trailing stop prices for remaining active positions
+        for upd_pos in updated:
+            code = upd_pos.get("stock_id") or upd_pos.get("code", "")
+            for t in self.active_positions:
+                if t.get("code") == code and t["status"] == "open":
+                    t.update(upd_pos)
+
+        # Refresh active positions list
+        self.active_positions = [t for t in self.trades if t["status"] == "open"]
+
+        return {
+            "exited": exited,
+            "updated": updated,
+            "summary_zh": result.get("summary_zh", "未知狀態"),
+        }
+
+    def get_portfolio_risk_summary(self, regime=None):
+        """Phase 36: Get comprehensive portfolio risk overview.
+
+        Returns a dict with total exposure, sector concentration, VaR,
+        drawdown risk, and overall risk score (1-10).
+
+        Args:
+            regime: Optional current market regime string.
+
+        Returns:
+            Dict with Taiwan-market aware Traditional Chinese labels.
+        """
+        if not self._risk_manager_available:
+            return {
+                "total_exposure": 0,
+                "num_positions": len(self.active_positions),
+                "overall_risk_score": 1,
+                "regime_risk": regime or "未知",
+            }
+
+        price_history = self.load_price_history()
+        total_value = sum(
+            t.get("entry_price", 0) * (t.get("shares", 1) or 1)
+            for t in self.active_positions
+        )
+
+        positions_for_risk = [
+            {
+                "stock_id": t["code"],
+                "value": t.get("entry_price", 0) * (t.get("shares", 1) or 1),
+                "sector": t.get("sector", "unknown"),
+            }
+            for t in self.active_positions
+        ]
+
+        portfolio_state = {
+            "total_value": total_value,
+            "positions": positions_for_risk,
+        }
+
+        return self._get_risk_summary(portfolio_state, price_history, regime)
 
     def save_trades(self):
         """Save trades to file"""
