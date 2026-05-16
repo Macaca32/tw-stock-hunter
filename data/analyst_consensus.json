@@ -1,0 +1,42 @@
+{
+  "_meta": {
+    "description": "Phase 35: Analyst consensus EPS estimates for Taiwan stocks. Used by earnings_analysis.check_estimate_surprise()",
+    "updated": "2026-05-17",
+    "fields": {
+      "consensus_eps": "Analyst consensus EPS estimate for current quarter (TWD)",
+      "beat_streak": "Number of consecutive quarters the stock beat consensus (int)",
+      "analyst_count": "Number of analysts covering (int)",
+      "last_updated": "ISO timestamp of last update"
+    }
+  },
+  "2330": {
+    "consensus_eps": 14.5,
+    "beat_streak": 2,
+    "analyst_count": 25,
+    "last_updated": "2026-05-15"
+  },
+  "2317": {
+    "consensus_eps": 10.8,
+    "beat_streak": 1,
+    "analyst_count": 18,
+    "last_updated": "2026-05-14"
+  },
+  "2454": {
+    "consensus_eps": 28.2,
+    "beat_streak": 3,
+    "analyst_count": 12,
+    "last_updated": "2026-05-13"
+  },
+  "2412": {
+    "consensus_eps": 5.1,
+    "beat_streak": 0,
+    "analyst_count": 8,
+    "last_updated": "2026-05-10"
+  },
+  "1301": {
+    "consensus_eps": 3.8,
+    "beat_streak": 1,
+    "analyst_count": 6,
+    "last_updated": "2026-05-12"
+  }
+}
