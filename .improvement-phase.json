@@ -1,7 +1,7 @@
 {
-  "current_phase": 39,
-  "phase_name": "Performance Dashboard UI — modern dark-theme dashboard for tracking screening & portfolio performance visually",
-  "started_at": "2026-05-17T07:00:00+08:00",
+  "current_phase": 40,
+  "phase_name": "TBD",
+  "started_at": null,
   "completed_phases": [
     {
       "phase": 0,
@@ -297,9 +297,17 @@
       "completed_at": "2026-05-17T05:30:00+08:00",
       "summary": "Created core/portfolio_optimizer.py (1333 lines) with 7 public functions: load_ensemble_results() reads Phase 37 output, compute_covariance_matrix() builds empirical covariance with holiday forward-fill, optimize_mean_variance() solves Markowitz with Taiwan constraints (stock ≤8%, sector ≤25%, min 1% position, long-only), optimize_black_litterman() implements BL framework with ensemble-derived views, apply_weight_smoothing() integrates Phase 6 max 5% daily change, validate_constraints() checks Phases 5/36 constraints, run_portfolio_optimizer() is the Stage 12 pipeline entry point. Uses scipy.optimize when available, falls back to iterative heuristic optimizer. Produces data/optimized_portfolio_YYYY-MM-DD.json with stock_weights, sector_allocation, annualized return/volatility/Sharpe, constraint_violations, smoothing_applied. Integrated as Stage 12 in run_pipeline.py after signal_fusion. 73 comprehensive tests, all passing. All Traditional Chinese labels, backward compatible with graceful skips.",
       "commit": "79587cb, 34c4817, 0eb32ef"
+    },
+    {
+      "phase": 39,
+      "name": "Performance Dashboard UI — modern dark-theme dashboard for tracking screening & portfolio performance visually",
+      "started_at": "2026-05-17T07:00:00+08:00",
+      "completed_at": "2026-05-17T11:00:00+08:00",
+      "summary": "Single-page dark-theme dashboard with Chart.js 4.x, Tailwind CSS CDN, Lucide Icons. 6 files (~3057 lines) covering KPI cards, candidates table (sortable/expandable), portfolio allocation donut/bar, P&L chart, VaR gauge, signal fusion radar (13 dimensions), regime history, cross-asset monitor, pipeline timeline. Data loaded client-side from JSON files with graceful degradation for missing data. Traditional Chinese labels throughout. 3 bugs fixed post-review: state.json path (repo root not data/), label_zh optimization method display, paper_trades empty handling.",
+      "commit": "9beb506, 61e3b40, 01edcd0, 40e6ee4"
     }
   ],
-  "notes": "Phase 38 complete. Portfolio optimization engine integrated with pipeline Stage 12.",
+  "notes": "Phase 39 complete. Dashboard UI implemented and verified.",
   "rounds_completed": 14,
   "last_zai_round": {
     "round": 6,

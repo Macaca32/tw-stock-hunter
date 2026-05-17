@@ -659,3 +659,48 @@ Z.ai produced a comprehensive layout design document with:
 - ⚠️ Some data sources need graceful degradation (paper_trades empty, no regime_history yet)
 
 ### Next: Implementation by Z.ai based on approved design + corrections.
+
+---
+
+## Phase 39 — Dashboard Implementation Review (2026-05-17)
+
+**Status:** ✅ COMPLETE  
+**Implementation Commit:** `9beb506`  
+**Bug Fixes:** `61e3b40`, `01edcd0`, `40e6ee4`
+
+### What Changed
+- **dashboard/index.html** (176 lines): Single-page layout with semantic sections, CDN dependencies (Chart.js 4.x, Tailwind CSS, Lucide Icons, Google Fonts)
+- **dashboard/css/custom.css** (784 lines): Dark theme variables, responsive grid system, table/card/chart styling, scrollbar theming
+- **dashboard/js/utils.js** (485 lines): Data adapters for all pipeline outputs, regime/signal/sector mappings with Traditional Chinese labels, risk computation helpers, fetch wrapper
+- **dashboard/js/charts.js** (~700 lines): 12 chart renderers — sector donut, holdings bar, P&L area+bar combo, VaR gauge (doughnut clip technique), signal fusion radar (13 dimensions), regime history step chart, cross-asset sparklines, correlation heatmap, pipeline timeline, ensemble score bars, sector concentration with limit line
+- **dashboard/js/tables.js** (~300 lines): Sortable candidates table with grade badges, expandable detail rows showing signals/checks/microstructure/red flags
+- **dashboard/js/app.js** (~500 lines): Main entry point — parallel data loading from state.json + dated JSON files, section renderers, refresh handler, graceful degradation for missing data
+
+### Review Corrections Applied (3 bugs fixed)
+1. **`61e3b40`: Fixed `state.json` path** — was `../data/state.json`, now `../state.json` (file lives at repo root, not in data/). Critical fix — dashboard would 404 and crash without this.
+2. **`01edcd0`: Added `label_zh` for optimization method** — portfolio meta now shows Traditional Chinese label (e.g., "單一股權分散（已平滑）") instead of raw English enum.
+3. **`40e6ee4`: Fixed `paper_trades.json` empty handling** — catch clause was returning `[]` which masked fetch failures; now returns `null` so adapter can distinguish between "file missing" and "empty array".
+
+### Design Alignment Review ✅
+- File path: `optimized_portfolio_{date}.json` ✓ (matches Phase 38 output)
+- Paper trades: empty `[]` shows "尚無交易記錄" placeholder ✓
+- Regime history: fallback to current-only with note ✓
+- VaR gauge: doughnut chart with circumference:180, rotation:270 (half-circle clip technique) ✓
+- Pipeline stages: reads from `state.json.pipeline_run` keys (timestamp, total_elapsed_sec, stages_completed, stages_total, failed_stage) ✓
+- Ensemble signals: exactly 13 dimensions mapped to Traditional Chinese labels ✓
+- CORS: dashboard uses relative paths (`../data/*.json`, `../state.json`) — requires local HTTP server
+
+### Code Quality Notes
+- **Data adapters** gracefully handle null/missing data with neutral defaults throughout
+- **Chart.js plugins** used creatively (center text on donut, gauge overlay, concentration limit line)
+- **Risk computation** done client-side (computeRiskScore, computeVarEstimate) — no server needed
+- **Sector resolution** uses TWSE industry code ranges (first 2 digits of stock code)
+- **All Traditional Chinese labels** consistent with pipeline output conventions
+- **No inline scripts in HTML** — clean separation between structure and logic
+- ⚠️ No README for dashboard usage instructions (minor — can add later)
+
+### Pipeline Test: PASSED ✅
+```
+12/12 stages successful in 36.4s
+Dashboard files do not affect pipeline execution (static HTML only)
+```
