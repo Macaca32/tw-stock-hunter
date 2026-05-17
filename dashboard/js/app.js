@@ -52,7 +52,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       stage2: fetchJSON(`../data/stage2_${APP.date}.json`).catch(() => null),
       ensemble: fetchJSON(`../data/ensemble_${APP.date}.json`).catch(() => null),
       portfolio: fetchJSON(`../data/optimized_portfolio_${APP.date}.json`).catch(() => null),
-      paperTrades: fetchJSON('../data/paper_trades.json').catch(() => []),
+      paperTrades: fetchJSON('../data/paper_trades.json').catch(() => null),
       marketContext: fetchJSON('../data/market_context_cache.json').catch(() => null),
     };
 
