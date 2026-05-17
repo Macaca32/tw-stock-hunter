@@ -238,7 +238,7 @@ function renderPortfolioSection() {
       <div class="meta-row"><span class="meta-label">預期年報酬</span><span class="meta-value mono">${(p.expectedReturnAnnual * 100).toFixed(1)}%</span></div>
       <div class="meta-row"><span class="meta-label">預期年波動</span><span class="meta-value mono">${(p.expectedVolatilityAnnual * 100).toFixed(1)}%</span></div>
       <div class="meta-row"><span class="meta-label">Sharpe</span><span class="meta-value mono">${p.sharpeRatio.toFixed(2)}</span></div>
-      <div class="meta-row"><span class="meta-label">最佳化方法</span><span class="meta-value">${p.optimizationMethod}</span></div>
+      <div class="meta-row"><span class="meta-label">最佳化方法</span><span class="meta-value">${p.optimizationMethodLabel}</span></div>
       <div class="meta-row"><span class="meta-label">平滑調整</span><span class="meta-value">${p.smoothingApplied ? '是' : '否'}</span></div>
       ${p.constraintViolations.length > 0
         ? `<div class="meta-row meta-warn"><span class="meta-label">限制違規</span><span class="meta-value">${p.constraintViolations.length} 項</span></div>`

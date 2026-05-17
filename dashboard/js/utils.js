@@ -261,6 +261,7 @@ function adaptPortfolio(data) {
     expectedVolatilityAnnual: data.expected_volatility_annual ?? 0,
     sharpeRatio: data.sharpe_ratio ?? 0,
     optimizationMethod: data.optimization_method ?? 'none',
+    optimizationMethodLabel: data.label_zh ?? data.optimization_method ?? '—',
     smoothingApplied: data.smoothing_applied ?? false,
     nStocks: data.n_stocks ?? 0,
     constraintViolations: data.constraint_violations || [],
