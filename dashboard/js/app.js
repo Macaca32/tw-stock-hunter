@@ -31,7 +31,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Step 1: Load state.json to resolve date
     try {
-      APP.state = await fetchJSON('../data/state.json');
+      APP.state = await fetchJSON('../state.json');
     } catch (e) {
       showError('無法載入 state.json，請確認已執行管線。');
       return;
