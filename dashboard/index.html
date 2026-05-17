@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TW Stock Hunter — 台股篩選儀表板</title>
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&family=Sarasa+Mono+SC:wght@400;600;700&display=swap" rel="stylesheet">
+
+  <!-- Tailwind CSS CDN (minimal — we mainly use custom.css) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: { extend: {} },
+    };
+  </script>
+
+  <!-- Chart.js 4.x CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+
+  <!-- Custom CSS -->
+  <link rel="stylesheet" href="css/custom.css">
+
+  <!-- Favicon -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎯</text></svg>">
+</head>
+<body class="dark">
+
+  <!-- Loading Overlay -->
+  <div id="loading-overlay">載入中</div>
+
+  <!-- Error Message -->
+  <div id="error-message"></div>
+
+  <!-- ─── Header ──────────────────────────────────────────────────── -->
+  <header class="header">
+    <div class="header-title">🎯 TW Stock Hunter<span>台股篩選儀表板</span></div>
+    <div class="header-separator"></div>
+    <div class="header-info">
+      <span id="header-timestamp" class="mono">—</span>
+    </div>
+    <div class="header-separator"></div>
+    <div class="header-info">
+      管線 <span id="header-pipeline-status" class="mono">—</span>
+    </div>
+    <div class="header-separator"></div>
+    <div id="header-regime-badge" class="header-info">—</div>
+    <button class="refresh-btn" onclick="refreshDashboard()" title="重新載入">↻ 重新載入</button>
+  </header>
+
+  <!-- ─── Main Content ────────────────────────────────────────────── -->
+  <main class="main-content">
+
+    <!-- ── KPI Cards Row ──────────────────────────────────────────── -->
+    <div class="kpi-row">
+      <div id="kpi-regime" class="kpi-card"></div>
+      <div id="kpi-breadth" class="kpi-card"></div>
+      <div id="kpi-funnel" class="kpi-card"></div>
+      <div id="kpi-pnl" class="kpi-card"></div>
+      <div id="kpi-risk" class="kpi-card"></div>
+    </div>
+
+    <!-- ── Candidates + Portfolio ──────────────────────────────────── -->
+    <div class="row-8-4">
+      <!-- Left: Candidates Table + Ensemble Bar -->
+      <div class="panel">
+        <div class="panel-title">📊 候選股排行</div>
+        <div id="candidates-table"></div>
+        <div style="margin-top:16px">
+          <div style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:8px">Ensemble 分數 (前10)</div>
+          <div style="height:220px">
+            <canvas id="chart-ensemble-bar"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right: Portfolio Allocation -->
+      <div class="panel">
+        <div class="panel-title">🗂️ 投資組合配置</div>
+        <div class="portfolio-charts">
+          <div class="donut-container">
+            <canvas id="chart-sector-donut"></canvas>
+          </div>
+          <div class="holdings-container">
+            <canvas id="chart-holdings-bar"></canvas>
+          </div>
+        </div>
+        <div id="portfolio-meta" class="portfolio-meta"></div>
+      </div>
+    </div>
+
+    <!-- ── P&L + Risk ──────────────────────────────────────────────── -->
+    <div class="row-8-4">
+      <!-- Left: P&L Chart -->
+      <div class="panel">
+        <div class="panel-title">📈 損益追蹤</div>
+        <div class="pnl-chart-container">
+          <canvas id="chart-pnl"></canvas>
+          <div id="pnl-stats" class="pnl-stats"></div>
+        </div>
+      </div>
+
+      <!-- Right: Risk Indicators -->
+      <div class="panel">
+        <div class="panel-title">⚠️ 風險指標</div>
+        <div class="var-gauge-container">
+          <canvas id="chart-var-gauge"></canvas>
+        </div>
+        <div id="var-info" class="var-info"></div>
+        <div class="concentration-container">
+          <canvas id="chart-sector-conc"></canvas>
+        </div>
+        <div id="risk-status-grid" class="risk-status-grid"></div>
+      </div>
+    </div>
+
+    <!-- ── Regime + Cross-Asset ────────────────────────────────────── -->
+    <div class="row-5-7">
+      <!-- Left: Regime History -->
+      <div class="panel">
+        <div class="panel-title">🌊 市場狀態</div>
+        <div class="regime-history-container">
+          <canvas id="chart-regime-history"></canvas>
+        </div>
+        <div id="regime-detail" class="regime-detail-card"></div>
+      </div>
+
+      <!-- Right: Cross-Asset Monitor -->
+      <div class="panel">
+        <div class="panel-title">🌐 跨資產監控</div>
+        <div id="cross-asset-rows"></div>
+        <div class="correlation-container">
+          <canvas id="chart-correlation"></canvas>
+        </div>
+        <div id="cross-asset-signal" class="cross-asset-signal"></div>
+      </div>
+    </div>
+
+    <!-- ── Signal Fusion Radar ─────────────────────────────────────── -->
+    <div class="panel">
+      <div class="panel-title">🔬 訊號融合雷達圖</div>
+      <div id="radar-selector" class="radar-controls"></div>
+      <div class="radar-container">
+        <canvas id="chart-signal-radar"></canvas>
+      </div>
+    </div>
+
+    <!-- ── Pipeline Timeline ───────────────────────────────────────── -->
+    <div class="panel">
+      <div class="panel-title">⚙️ 管線執行紀錄</div>
+      <div class="pipeline-container">
+        <canvas id="chart-pipeline"></canvas>
+      </div>
+      <div id="pipeline-info" class="pipeline-info"></div>
+    </div>
+
+  </main>
+
+  <!-- ─── Footer ───────────────────────────────────────────────────── -->
+  <footer class="footer">
+    資料來源: TWSE + yfinance | 本儀表板為靜態頁面，資料僅供參考，不構成投資建議 |
+    <span class="mono">TW Stock Hunter</span>
+  </footer>
+
+  <!-- ─── Scripts (order matters) ──────────────────────────────────── -->
+  <script src="js/utils.js"></script>
+  <script src="js/charts.js"></script>
+  <script src="js/tables.js"></script>
+  <script src="js/app.js"></script>
+
+</body>
+</html>
